@@ -1,0 +1,18 @@
+# Shared dependencies for every service (orchestrator + all agent workers).
+# A service's own requirements.txt pulls this in via `-r ../../requirements/base.txt`
+# and adds only what it needs beyond this.
+
+pydantic==2.9.2
+pydantic-settings==2.6.1
+structlog==24.4.0
+
+sqlalchemy==2.0.36
+asyncpg==0.30.0
+psycopg[binary]==3.2.3
+pgvector==0.3.6
+alembic==1.14.0
+
+celery==5.4.0
+redis==5.2.0
+
+sentry-sdk==2.18.0

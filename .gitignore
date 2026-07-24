@@ -1,0 +1,22 @@
+# Secrets / environment
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local data volumes (bind-mounted media output, not object storage itself)
+data/
+
+# Editor/OS
+.DS_Store
+.idea/
+.vscode/
