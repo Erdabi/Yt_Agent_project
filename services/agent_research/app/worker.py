@@ -27,7 +27,7 @@ video ideas. It runs in one of two modes, both handled by the same
   (docs/architecture/01-system-architecture.md §1.5, step 1) a natural
   follow-up once there's a consumer for it (a dashboard, an API endpoint).
 
-Both modes share the same three building blocks:
+Both modes share three building blocks:
 - `TrendAggregator` (trend_sources/) — trend signals feeding the prompt;
   only the seed-topic source is real today, the rest are honest
   `NotImplementedError` stubs (Phase 4).
@@ -36,6 +36,18 @@ Both modes share the same three building blocks:
 - `DuplicateChecker` (dedup.py) — a lexical similarity check against this
   channel's existing ideas; flags a likely duplicate in `research_notes`
   and caps the score rather than failing the job outright.
+
+Enrich mode additionally builds a **Knowledge Package**
+(`KnowledgeBuilder`, knowledge_builder.py) — deep, source-grounded
+research on the now-finalized topic (verified facts, timeline, entities,
+citations, keywords, related topics, hooks, supporting notes; see
+libs/schemas/knowledge.py) — and stores it as JSON + Markdown via
+`libs.storage`, so the Script Agent can write directly from it instead of
+researching the topic itself. Discover mode does not: generating a full
+web-search-backed knowledge package for every one of several unapproved
+candidate ideas would be expensive and mostly wasted, since most won't be
+approved — it's built once, for the one idea a human/goal has actually
+committed to.
 
 See docs/architecture/03-agent-responsibilities.md §3.2 for the full
 picture, including the `Channel.persona_config` keys this code reads
@@ -57,9 +69,13 @@ from libs.models.idea import VideoIdea
 from libs.models.job import Job
 from libs.models.project import Project
 from libs.schemas.jobs import JobContext
+from libs.schemas.knowledge import KnowledgePackage
+from libs.storage import get_storage_backend
 
 from .dedup import DuplicateChecker
 from .idea_generator import GeneratedIdea, IdeaGenerator
+from .knowledge_builder import KnowledgeBuilder
+from .knowledge_package_render import render_markdown
 from .trend_sources.aggregator import TrendAggregator
 
 logger = get_logger(__name__)
@@ -91,6 +107,8 @@ class ResearchAgent(BaseAgent):
         self._trends = TrendAggregator()
         self._generator = IdeaGenerator()
         self._dedup = DuplicateChecker(threshold=_DUPLICATE_SIMILARITY_THRESHOLD)
+        self._knowledge = KnowledgeBuilder()
+        self._storage = get_storage_backend()
 
     def run(self, context: JobContext) -> dict[str, Any]:
         if context.project_id:
@@ -139,17 +157,46 @@ class ResearchAgent(BaseAgent):
         idea_data = generated[0]
         research_notes, score, duplicate = self._apply_dedup(idea_data, existing_snapshot)
 
+        package = self._knowledge.build(
+            topic=idea_data.topic,
+            target_audience=idea_data.target_audience,
+            channel_niche=channel_niche,
+            channel_persona=channel_persona,
+            banned_topics=banned_topics,
+            existing_keywords=idea_data.keywords,
+        )
+        json_path, md_path = self._store_knowledge_package(context.project_id, package)
+
         with sync_session_scope() as session:
             idea = session.get(VideoIdea, UUID(idea_id))
             self._write_idea_fields(idea, idea_data, research_notes, score)
+            idea.knowledge_package_json_path = json_path
+            idea.knowledge_package_md_path = md_path
 
         logger.info(
             "research_idea_enriched",
             idea_id=idea_id,
             channel_id=channel_id,
             possible_duplicate=duplicate is not None,
+            knowledge_package_json_path=json_path,
         )
-        return self._result(mode="enrich", idea_id=idea_id, idea_data=idea_data, research_notes=research_notes, score=score, duplicate=duplicate)
+        return self._result(
+            mode="enrich", idea_id=idea_id, idea_data=idea_data, research_notes=research_notes,
+            score=score, duplicate=duplicate,
+            knowledge_package_json_path=json_path, knowledge_package_md_path=md_path,
+            knowledge_package_summary=package.summary,
+        )
+
+    def _store_knowledge_package(self, project_id: str, package: KnowledgePackage) -> tuple[str, str]:
+        json_path = self._storage.save_bytes(
+            project_id, "research", "knowledge_package.json",
+            package.model_dump_json(indent=2).encode("utf-8"),
+        )
+        md_path = self._storage.save_bytes(
+            project_id, "research", "knowledge_package.md",
+            render_markdown(package).encode("utf-8"),
+        )
+        return json_path, md_path
 
     # --- Discover mode: several new candidate ideas for a channel --------
 
@@ -242,7 +289,12 @@ class ResearchAgent(BaseAgent):
         idea.research_notes = research_notes
 
     @staticmethod
-    def _result(*, mode: str, idea_id: str, idea_data: GeneratedIdea, research_notes: str, score: int, duplicate) -> dict[str, Any]:
+    def _result(
+        *, mode: str, idea_id: str, idea_data: GeneratedIdea, research_notes: str, score: int, duplicate,
+        knowledge_package_json_path: str | None = None,
+        knowledge_package_md_path: str | None = None,
+        knowledge_package_summary: str | None = None,
+    ) -> dict[str, Any]:
         return {
             "mode": mode,
             "idea_id": idea_id,
@@ -256,6 +308,11 @@ class ResearchAgent(BaseAgent):
             "suggested_length_sec": idea_data.suggested_length_sec,
             "research_notes": research_notes,
             "possible_duplicate_of": duplicate.idea_id if duplicate else None,
+            # None in discover mode — see the module docstring for why a
+            # Knowledge Package is only built in enrich mode.
+            "knowledge_package_json_path": knowledge_package_json_path,
+            "knowledge_package_md_path": knowledge_package_md_path,
+            "knowledge_package_summary": knowledge_package_summary,
         }
 
 

@@ -1,0 +1,19 @@
+template: |
+  Video topic: {{ topic }}
+  Target audience: {{ target_audience }}
+  Channel niche: {{ channel_niche }}
+  Channel persona / tone: {{ channel_persona }}
+  {% if banned_topics %}Banned topics (do not research or reference these): {{ banned_topics | join(", ") }}
+  {% endif %}
+  {% if existing_keywords %}Keywords already identified for this idea: {{ existing_keywords | join(", ") }}
+  {% endif %}
+  Research this topic thoroughly enough for someone else to write a full
+  video script from your package alone, without doing any research of
+  their own.
+metadata:
+  description: >
+    Per-call context for the Research Agent's knowledge-package builder
+    (services/agent_research/app/knowledge_builder.py). Variables: topic,
+    target_audience, channel_niche, channel_persona, banned_topics,
+    existing_keywords.
+  owner: research-agent

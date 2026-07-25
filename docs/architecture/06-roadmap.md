@@ -43,11 +43,15 @@ for a single developer, not commitments.
   trend analysis, topic generation, lexical duplicate-content checking,
   scoring, audience/angle/competition-level/length/notes output, both in
   Manager-dispatched (enrich one goal) and channel-level (discover
-  several) modes. Live trend scraping (YouTube Trending/Google
-  Trends/Reddit/RSS) and embedding-based semantic dedup remain Phase 4,
-  as originally planned; automatic scheduling for discover mode (a daily
-  ideation run per channel) is unbuilt too — it's callable today but
-  nothing calls it on a cadence yet.
+  several) modes, plus a structured Knowledge Package (verified facts,
+  timeline, entities, citations, keywords, related topics, hooks,
+  supporting notes — `libs/schemas/knowledge.py`) built with real
+  web-search-backed research for the one enriched idea, stored as JSON +
+  Markdown for the Script Agent to consume directly. Live trend scraping
+  (YouTube Trending/Google Trends/Reddit/RSS) and embedding-based semantic
+  dedup remain Phase 4, as originally planned; automatic scheduling for
+  discover mode (a daily ideation run per channel) is unbuilt too — it's
+  callable today but nothing calls it on a cadence yet.
 - Script Agent with one real LLM provider.
 - Video Agent's modules land one real implementation at a time, in-process
   (no separate agents/queues to coordinate — see

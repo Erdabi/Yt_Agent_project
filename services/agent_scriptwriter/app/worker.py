@@ -9,6 +9,21 @@ docs/architecture/03-agent-responsibilities.md §3.3 and
 docs/architecture/06-roadmap.md, Phase 1. Its generation prompt already
 exists at prompts/script/generate_script/ (see libs/prompts) — load it
 via `get_prompt_loader().get("script", "generate_script")` once this lands.
+
+The Research Agent (services/agent_research) already produces a
+Knowledge Package for the approved idea this job writes from — load it
+instead of re-researching the topic:
+
+    from libs.storage import get_storage_backend
+    from libs.schemas.knowledge import KnowledgePackage
+
+    package = KnowledgePackage.model_validate_json(
+        get_storage_backend().read_bytes(idea.knowledge_package_json_path)
+    )
+
+See libs/schemas/knowledge.py for the full shape (verified facts,
+timeline, entities, citations, keywords, related topics, hooks,
+supporting notes).
 """
 
 from typing import Any

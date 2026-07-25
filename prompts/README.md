@@ -68,12 +68,21 @@ types.
   (`services/orchestrator/app/manager/reasoning.py`). `workflow_decision_system`
   has a Claude-specific override (`v1.claude.yaml`); `workflow_decision_user`
   demonstrates variables and conditionals.
-- `research/` — the Research Agent's idea generation
-  (`services/agent_research/app/idea_generator.py`), the second real
-  integration. `generate_ideas_system` has a Claude-specific override the
-  same way the Manager's does; `generate_ideas_user` demonstrates loops
-  and filters (`{% for %}`, `| join(", ")`) on top of variables and
-  conditionals.
+- `research/` — the Research Agent's two real Claude integrations:
+  - `generate_ideas_system`/`generate_ideas_user`
+    (`services/agent_research/app/idea_generator.py`) — picks/scores a
+    topic. `generate_ideas_system` has a Claude-specific override the same
+    way the Manager's does; `generate_ideas_user` demonstrates loops and
+    filters (`{% for %}`, `| join(", ")`) on top of variables and
+    conditionals.
+  - `build_knowledge_package_system`/`build_knowledge_package_user`
+    (`services/agent_research/app/knowledge_builder.py`) — deep-researches
+    a topic already chosen, using Claude's server-side `web_search`/`web_fetch`
+    tools. The one prompt pair in this whole system where the Claude
+    override matters functionally, not just stylistically: it documents
+    that `tool_choice` is deliberately *not* forced for this call (every
+    other Claude call here forces it), since Claude needs room to search
+    before answering.
 - `script/`, `video/`, `qa/` — draft `v1` templates for each agent's
   future LLM call, grounded in
   `docs/architecture/03-agent-responsibilities.md`. Not wired into any

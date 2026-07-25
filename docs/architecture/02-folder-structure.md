@@ -22,7 +22,8 @@ yt-agent/
 ├── prompts/                          # versioned prompt template files, loaded via libs/prompts —
 │   │                                 # never embedded as Python string constants — see prompts/README.md
 │   ├── manager/{workflow_decision_system/, workflow_decision_user/}
-│   ├── research/{generate_ideas_system/, generate_ideas_user/}
+│   ├── research/{generate_ideas_system/, generate_ideas_user/,
+│   │             build_knowledge_package_system/, build_knowledge_package_user/}
 │   ├── script/generate_script/
 │   ├── video/{storyboard_shot_planning/, thumbnail_prompt/}
 │   └── qa/policy_review/
@@ -42,7 +43,9 @@ yt-agent/
 │   │   ├── Dockerfile
 │   │   └── app/
 │   │       ├── worker.py             # ResearchAgent (enrich one goal / discover several), Celery tasks
-│   │       ├── idea_generator.py     # the Claude call (forced tool use, prompts from prompts/research/)
+│   │       ├── idea_generator.py     # picks/scores a topic (forced tool use, prompts from prompts/research/)
+│   │       ├── knowledge_builder.py  # deep-researches a chosen topic (web_search/web_fetch, tool_choice NOT forced)
+│   │       ├── knowledge_package_render.py  # renders a KnowledgePackage as Markdown
 │   │       ├── dedup.py              # lexical duplicate-content check (title + keyword overlap)
 │   │       └── trend_sources/        # base.py, seed_list.py (real), youtube_trending.py,
 │   │                                 # google_trends.py, reddit.py, rss.py (stubs), aggregator.py
@@ -105,7 +108,9 @@ yt-agent/
 │   │   └── registry.py               # get_prompt_loader(), reads PROMPTS_ROOT
 │   │
 │   ├── models/                       # SQLAlchemy ORM models, shared across all services
-│   └── schemas/                      # Pydantic DTOs shared between orchestrator and agents (job payloads/results)
+│   └── schemas/                      # Pydantic DTOs shared between orchestrator and agents
+│       ├── jobs.py                   # JobContext — job payloads/results
+│       └── knowledge.py              # KnowledgePackage — the Research Agent's output, Script Agent's input
 │
 ├── migrations/                       # Alembic migration scripts (single source of truth for schema)
 │   ├── env.py

@@ -54,6 +54,13 @@ class VideoIdea(Base, UUIDPrimaryKeyMixin, CreatedAtMixin):
     # duplicate-content warnings — everything that informed the score but
     # doesn't fit a single structured column.
     research_notes: Mapped[str | None] = mapped_column(Text)
+    # Paths (via libs.storage, not the content itself) to the deep-research
+    # Knowledge Package the Script Agent consumes directly instead of
+    # repeating research — see libs/schemas/knowledge.py and
+    # services/agent_research/app/knowledge_builder.py. Both null until
+    # enrich mode builds one; discover mode never does (see worker.py).
+    knowledge_package_json_path: Mapped[str | None] = mapped_column(Text)
+    knowledge_package_md_path: Mapped[str | None] = mapped_column(Text)
     # pgvector column for semantic-similarity dedup against past ideas/videos.
     # Stays null until a real embedding provider is wired in — the Research
     # Agent's current duplicate check is a lexical heuristic instead (see

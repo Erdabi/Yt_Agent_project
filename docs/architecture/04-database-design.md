@@ -62,6 +62,8 @@ only one is used initially.
 | competition_level | enum | `low`, `medium`, `high` — how saturated this angle already is on YouTube, not production difficulty |
 | suggested_length_sec | int | |
 | research_notes | text | what informed the idea — trend signals, tradeoffs, duplicate-content warnings |
+| knowledge_package_json_path | text | path (via `libs.storage`, not the content) to the Research Agent's deep-research Knowledge Package — see `libs/schemas/knowledge.py`. Null until enrich mode builds one; discover mode never does |
+| knowledge_package_md_path | text | the same package rendered as Markdown, generated from the JSON, never authored separately |
 | embedding | vector(1536) | pgvector — stays null today; no embedding provider is wired in yet, so duplicate detection is a lexical heuristic instead (services/agent_research/app/dedup.py) |
 | status | enum | `proposed`, `approved`, `rejected` |
 | created_at | timestamptz | |

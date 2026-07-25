@@ -87,14 +87,41 @@ runs in one of two modes:
     embedding provider, which isn't configured. A likely duplicate is
     still stored (a human can judge it) with a note and a capped score,
     not silently dropped.
+  - **Builds a Knowledge Package** (enrich mode only —
+    `knowledge_builder.py`) — deep, source-grounded research on the
+    now-finalized topic: verified facts, a timeline, entities, citations,
+    keywords, related topics, hooks, and supporting notes (schema:
+    `libs/schemas/knowledge.py`). This is the one Claude call in the whole
+    pipeline that includes Anthropic's server-side `web_search`/`web_fetch`
+    tools and does **not** force `tool_choice` — forcing it would leave no
+    room for Claude to actually search before answering, and a "verified
+    fact" that's really just an unforced guess isn't verified. A long
+    research turn that pauses mid-way (`stop_reason: "pause_turn"`) is
+    resumed automatically, bounded to a few continuations. Stored as JSON
+    (source of truth) + a Markdown rendering generated from it via
+    `libs.storage`, keyed by project id
+    (`{project_id}/research/knowledge_package.{json,md}`), with
+    `VideoIdea.knowledge_package_json_path`/`.knowledge_package_md_path`
+    pointing at them — so the Script Agent can load
+    `KnowledgePackage.model_validate_json(...)` directly instead of
+    researching the topic itself. Discover mode skips this: running a full
+    web-search-backed research pass on every unapproved candidate idea
+    would be expensive and mostly wasted. No fallback here either — more so
+    than idea generation, since fabricating "verified facts" with fake
+    citations would be actively harmful, not just low-value.
 - **Output:** `video_ideas` rows — topic (`title`), `target_audience`,
   `rationale` (why people would watch), `keywords`, `suggested_angle`,
-  `competition_level`, `score`, `suggested_length_sec`, `research_notes`.
+  `competition_level`, `score`, `suggested_length_sec`, `research_notes`,
+  plus (enrich mode) the Knowledge Package path columns above.
 - **Failure mode:** a trend source being unreachable is non-fatal (see
-  above); an idea-generation failure fails the job, which the Manager's
-  reasoning engine then retries or escalates like any other agent failure.
-- **Prompt:** `prompts/research/generate_ideas_system/` (with a
-  Claude-specific override) and `prompts/research/generate_ideas_user/`.
+  above); an idea-generation or knowledge-package failure fails the job,
+  which the Manager's reasoning engine then retries or escalates like any
+  other agent failure.
+- **Prompts:** `prompts/research/generate_ideas_system/` +
+  `generate_ideas_user/` (idea generation), and
+  `prompts/research/build_knowledge_package_system/` +
+  `build_knowledge_package_user/` (the Knowledge Package) — each system
+  prompt has a Claude-specific override.
 
 ## 3.3 Script Writing Agent
 
