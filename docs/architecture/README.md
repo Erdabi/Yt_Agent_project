@@ -1,9 +1,11 @@
 # Autonomous AI YouTube Video Creation System — Architecture
 
 This directory contains the production architecture for an autonomous, agent-based
-YouTube content pipeline: research → script → voice-over → video assembly →
-thumbnail → QA → publish → performance tracking, deployed as Docker Compose
-services on a single Hetzner Cloud VPS.
+YouTube content pipeline: research → script → video (storyboard, voice-over,
+assembly, and thumbnail generation as one agent's internal modules) → QA →
+publish, deployed as Docker Compose services on a single Hetzner Cloud VPS.
+Performance tracking (analytics) runs independently, on its own schedule,
+against already-published videos — it is not a step in that pipeline.
 
 No implementation code is included yet — these documents are the design baseline
 that implementation work will follow.

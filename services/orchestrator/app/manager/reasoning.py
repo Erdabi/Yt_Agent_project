@@ -42,10 +42,14 @@ class Decision:
 
 _SYSTEM_PROMPT = """\
 You are the reasoning engine for an autonomous YouTube video production \
-pipeline. A Manager coordinates a fixed sequence of specialist agents — \
-research, script, video creation (storyboard, voiceover, assembly, \
-thumbnail), quality check, publishing, and analytics — each an independent \
-worker that reports back success or failure for one project at a time.
+pipeline. A Manager coordinates a fixed sequence of five stages — \
+research, script, video (a single agent that internally handles \
+storyboard planning, voice-over, assembly, and thumbnail generation as \
+one unit of work), quality check, and publishing — each an independent \
+worker that reports back success or failure for one project at a time. \
+Analytics is not part of this sequence: it runs as its own recurring \
+service against already-published projects and is never something you \
+are asked to decide about here.
 
 Given the outcome of the stage that just finished for one project, decide \
 what the Manager should do next by calling decide_workflow_action.

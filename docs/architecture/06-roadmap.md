@@ -11,9 +11,16 @@ for a single developer, not commitments.
   Docker images; Docker Compose skeleton with just `postgres`, `redis`,
   `minio` running.
 - `libs/core` (config, logging, DB session/engine, Celery app factory).
-- Provider abstraction interfaces in `libs/providers/*` defined but backed by
-  stub/mock implementations only — this lets every later agent be built
-  against a stable interface before real API keys/costs are involved.
+- Provider abstraction interfaces in `libs/providers/*`, config-file-driven
+  (`config/providers.yaml`) and backed by stub implementations only — this
+  lets every later agent be built against a stable interface before real
+  API keys/costs are involved. **Done** as of the Manager Agent /
+  video-consolidation refactor: the switching mechanism (YAML → dynamic
+  import → instantiated class) is real; only the vendor SDK calls
+  themselves remain stubs.
+- Centralized asset storage abstraction (`libs/storage`), local-filesystem
+  backend only, keyed by project id. **Done** for the same reason above —
+  a real media-producing agent has something to write to from day one.
 - Alembic baseline migration for the core schema
   ([Database Design §4.2](./04-database-design.md#core-tables)).
 - CI pipeline skeleton (lint, type-check, test, build images).
@@ -23,15 +30,19 @@ for a single developer, not commitments.
 
 ## Phase 1 — MVP single-path pipeline (~3 weeks)
 
-- Orchestrator with a simple linear state machine (no retry-routing
-  sophistication yet).
+- Manager Agent with a simple linear state machine (no retry-routing
+  sophistication yet). **Done**, including the Claude-backed reasoning
+  engine and deterministic fallback.
 - Research Agent: manual/seed topic list + one LLM call to expand into
   scored ideas (live trend scraping deferred to Phase 4).
 - Script Agent with one real LLM provider.
-- Voice-over Agent with one real TTS provider.
-- Video Assembly Agent: static images/stock footage + Ken Burns-style motion +
-  burned-in captions via ffmpeg (no AI-generated visuals yet).
-- Thumbnail Agent: template + text overlay only (no AI image generation yet).
+- Video Agent's modules land one real implementation at a time, in-process
+  (no separate agents/queues to coordinate — see
+  [Agent Responsibilities §3.4](./03-agent-responsibilities.md#34-video-agent)):
+  voice-over module with one real TTS provider; assembly module with
+  static images/stock footage + Ken Burns-style motion + burned-in
+  captions via ffmpeg (no AI-generated visuals yet); thumbnail module with
+  template + text overlay only (no AI image generation yet).
 - Publisher Agent: manual trigger, no auto-scheduling.
 - A human approval checkpoint at **every** stage transition (safest possible
   starting posture).
@@ -62,8 +73,10 @@ dashboard; a simulated provider outage demonstrably fails over.
 - Auto-publish path: the manual-approval gate becomes a config toggle,
   disabled once trust in QA is established (can be re-enabled per channel at
   any time).
-- Analytics Agent: scheduled YouTube Analytics/Data API pulls into
-  `performance_metrics`.
+- Analytics Agent: its independent scheduling (Celery beat sweep of
+  `PUBLISHED` projects, decoupled from the Manager) already exists as of
+  the video-consolidation refactor — this phase adds the real YouTube
+  Analytics/Data API pulls into `performance_metrics` behind it.
 - Dashboard additions: pipeline status board, per-video performance charts.
 
 **Exit criteria:** a video can go from idea to published on YouTube with zero
@@ -91,8 +104,10 @@ human tuning prompts by hand.
 ## Phase 5 — Hardening & scale (ongoing)
 
 - Load/performance testing of the render pipeline; horizontal scaling of
-  worker containers (`docker compose up --scale agent_video_assembly=N`), or
-  moving that one agent to a beefier/GPU-equipped host if needed.
+  worker containers (`docker compose up --scale agent_video=N`), or moving
+  that one agent to a beefier/GPU-equipped host if needed — the assembly
+  module is still the CPU/RAM-hungry part even though it now shares a
+  container with the other three video modules.
 - Backup/restore drills: nightly `pg_dump` + MinIO sync to off-VPS storage
   (Hetzner Storage Box / Backblaze B2), with a documented, tested restore
   runbook — not just a cron job nobody has verified.

@@ -17,14 +17,22 @@ class IdeaStatus(str, enum.Enum):
 class ProjectStage(str, enum.Enum):
     """Mirrors the pipeline state machine in
     docs/architecture/01-system-architecture.md §1.3.
+
+    The Manager Agent only ever orchestrates these five stages end to end:
+    IDEATION -> SCRIPTING -> VIDEO_CREATION -> QA_REVIEW -> PUBLISHING ->
+    PUBLISHED. `VIDEO_CREATION` covers what used to be four separate
+    stages (storyboard, voiceover, video assembly, thumbnail) — those are
+    now internal modules of a single Video Agent
+    (services/agent_video/app/video_agent.py) run inside one job, so the
+    Manager never sees or retries them individually. Analytics is
+    deliberately not a stage here at all: it runs as an independent,
+    recurring service after a project reaches PUBLISHED (see
+    services/agent_analytics), decoupled from this state machine entirely.
     """
 
     IDEATION = "ideation"
     SCRIPTING = "scripting"
-    STORYBOARD = "storyboard"
-    VOICEOVER = "voiceover"
-    VIDEO_ASSEMBLY = "video_assembly"
-    THUMBNAIL = "thumbnail"
+    VIDEO_CREATION = "video_creation"
     QA_REVIEW = "qa_review"
     AWAITING_APPROVAL = "awaiting_approval"
     PUBLISHING = "publishing"
@@ -32,7 +40,6 @@ class ProjectStage(str, enum.Enum):
     FAILED_QA = "failed_qa"
     NEEDS_HUMAN_REVIEW = "needs_human_review"
     REJECTED = "rejected"
-    ANALYTICS = "analytics"
 
 
 class ProjectStatus(str, enum.Enum):

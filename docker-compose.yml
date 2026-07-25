@@ -5,12 +5,17 @@
 # comment atop each Dockerfile.
 #
 # Deliberately not included yet, because nothing in this codebase uses them:
-#   - MinIO/object storage — no agent produces a real media artifact yet.
-#   - Celery beat (the scheduler) — no periodic job exists to schedule until
-#     the Research Agent's ideation logic lands (Phase 1).
+#   - MinIO/object storage — the centralized asset storage abstraction
+#     (libs/storage) currently only ships a local-filesystem backend; add
+#     a MinIO service + backend when a real media-producing agent needs
+#     durable object storage beyond one VPS's disk.
 #   - Caddy/reverse proxy — there is no dashboard to put behind TLS yet
 #     (Phase 2).
 # Add each when the thing it would front or run actually exists.
+#
+# `agent_analytics_beat` below is this stack's one Celery beat process —
+# it exists specifically because Analytics is the only agent that runs on
+# its own recurring schedule rather than being dispatched by the Manager.
 
 services:
   postgres:
@@ -117,56 +122,18 @@ services:
       redis:
         condition: service_healthy
 
-  agent_storyboard:
+  # Replaces what used to be four separate services (agent_storyboard,
+  # agent_voiceover, agent_video_assembly, agent_thumbnail) — those are now
+  # internal modules of one Video Agent, run as a single job on the `video`
+  # queue (see services/agent_video/app/video_agent.py).
+  agent_video:
     build:
       context: .
-      dockerfile: services/agent_storyboard/Dockerfile
+      dockerfile: services/agent_video/Dockerfile
     restart: unless-stopped
     env_file: .env
     environment:
-      - SERVICE_NAME=agent_storyboard
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-      redis:
-        condition: service_healthy
-
-  agent_voiceover:
-    build:
-      context: .
-      dockerfile: services/agent_voiceover/Dockerfile
-    restart: unless-stopped
-    env_file: .env
-    environment:
-      - SERVICE_NAME=agent_voiceover
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-      redis:
-        condition: service_healthy
-
-  agent_video_assembly:
-    build:
-      context: .
-      dockerfile: services/agent_video_assembly/Dockerfile
-    restart: unless-stopped
-    env_file: .env
-    environment:
-      - SERVICE_NAME=agent_video_assembly
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-      redis:
-        condition: service_healthy
-
-  agent_thumbnail:
-    build:
-      context: .
-      dockerfile: services/agent_thumbnail/Dockerfile
-    restart: unless-stopped
-    env_file: .env
-    environment:
-      - SERVICE_NAME=agent_thumbnail
+      - SERVICE_NAME=agent_video
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -201,6 +168,9 @@ services:
       redis:
         condition: service_healthy
 
+  # The worker half: consumes the `analytics` queue, same as every other
+  # agent. Never dispatched by the Manager — see
+  # services/agent_analytics/app/worker.py for why.
   agent_analytics:
     build:
       context: .
@@ -209,6 +179,30 @@ services:
     env_file: .env
     environment:
       - SERVICE_NAME=agent_analytics
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  # The scheduler half: same image as `agent_analytics` above, running
+  # `celery beat` instead of `celery worker` — exactly the orchestrator/
+  # manager_worker split, applied here. This is what actually fires
+  # `agents.analytics.sweep` on the ANALYTICS_SWEEP_INTERVAL_HOURS cadence;
+  # without this service the analytics queue would sit idle forever since
+  # nothing else ever enqueues that task. Beat's own schedule-tracking file
+  # is not volume-backed — a restart just re-reads the in-code schedule and
+  # resumes on the same cadence, at most delaying one sweep, which is an
+  # acceptable trade for not adding a volume for a single timestamp file.
+  agent_analytics_beat:
+    build:
+      context: .
+      dockerfile: services/agent_analytics/Dockerfile
+    command: ["celery", "-A", "app.worker:celery_app", "beat", "--loglevel=info"]
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - SERVICE_NAME=agent_analytics_beat
     depends_on:
       migrate:
         condition: service_completed_successfully

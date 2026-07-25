@@ -33,6 +33,16 @@ class BaseAgent(ABC):
     #: log lines and must match the `agent_name` a Job row is created with.
     name: str
 
+    #: Whether finishing a job should notify the Manager Agent (see
+    #: `_notify_manager` below) so it can make an advance/retry/escalate
+    #: decision. True for every stage in the Manager's own workflow plan
+    #: (services/orchestrator/app/manager/workflow.py). The Analytics
+    #: Agent sets this to False: it runs on its own recurring schedule
+    #: against already-`PUBLISHED` projects, entirely decoupled from the
+    #: pipeline state machine — a failed or slow analytics pull must never
+    #: be able to affect a video's production status or retry count.
+    reports_to_manager: bool = True
+
     @abstractmethod
     def run(self, context: JobContext) -> dict[str, Any]:
         """Do the agent's actual work and return a JSON-serializable result.
@@ -69,7 +79,8 @@ class BaseAgent(ABC):
             self._mark_finished(job_id, result=result)
             return result
         finally:
-            self._notify_manager(job_id)
+            if self.reports_to_manager:
+                self._notify_manager(job_id)
             clear_job_context()
 
     def _mark_running(self, job_id: str) -> tuple[JobContext, int]:

@@ -3,7 +3,11 @@
 ## 1.1 Overview
 
 The system is a pipeline of independent **agents**, each responsible for one
-production stage, coordinated by a central **Orchestrator**. Agents communicate
+production stage, coordinated by a central **Orchestrator** service. Within
+that service, the **Manager Agent** (services/orchestrator/app/manager) is
+the actual decision-maker — the component that owns the workflow plan,
+dispatches jobs, and decides advance/retry/escalate — while "Orchestrator"
+refers to the FastAPI + Celery service it runs inside of. Agents communicate
 only through the **task queue** (Redis) and the **database** (PostgreSQL) — never
 directly with each other. This keeps the system loosely coupled: any agent's
 container can be rebuilt, restarted, or replaced without touching the others.
@@ -35,34 +39,42 @@ flowchart TB
 
         A1["Research Agent"]
         A2["Script Agent"]
-        A3["Storyboard Agent"]
-        A4["Voice-over Agent"]
-        A5["Video Assembly Agent"]
-        A6["Thumbnail Agent"]
+        A3["Video Agent\n(storyboard + voice-over +\nassembly + thumbnail modules)"]
         A7["QA Agent"]
         A8["Publisher Agent"]
-        A9["Analytics Agent"]
+        A9["Analytics Agent\n(independent, scheduled)"]
 
         PG[("PostgreSQL")]
-        STORE[("MinIO / media volume")]
+        STORE[("Centralized asset storage\n(libs/storage — local disk today,\nMinIO/S3 a config change later)")]
     end
 
     PROXY --> DASH
     DASH <--> ORCH
     ORCH <--> PG
     ORCH --> Q
-    Q --> A1 & A2 & A3 & A4 & A5 & A6 & A7 & A8 & A9
-    A1 & A2 & A3 & A4 & A5 & A6 & A7 & A8 & A9 --> PG
+    Q --> A1 & A2 & A3 & A7 & A8
+    A1 & A2 & A3 & A7 & A8 --> PG
     A1 -.-> LLM
     A2 -.-> LLM
     A3 -.-> IMG
     A3 -.-> STOCK
-    A4 -.-> TTS
-    A6 -.-> IMG
+    A3 -.-> TTS
     A8 -.-> YT
     A9 -.-> YT
-    A4 & A5 & A6 --> STORE
+    A3 --> STORE
+    A9 --> PG
+
+    BEAT["Celery beat\n(agent_analytics_beat)"] -.->|"schedules"| A9
 ```
+
+The Video Agent is one Celery task on one queue (`video`) — storyboard,
+voice-over, assembly, and thumbnail generation are its four internal
+modules (services/agent_video/app/modules/), invoked in sequence within a
+single job, not four separately-dispatched agents. The Analytics Agent is
+drawn separately from the `Q` queue fan-out on purpose: it is never
+dispatched by the Orchestrator's pipeline queue at all — its own Celery
+beat process (`agent_analytics_beat`) triggers it on a recurring schedule
+against already-`PUBLISHED` projects (§1.5, step 9).
 
 ## 1.3 Pipeline state machine
 
@@ -74,11 +86,8 @@ failure, they do not self-advance the pipeline.
 stateDiagram-v2
     [*] --> IDEATION
     IDEATION --> SCRIPTING: idea approved
-    SCRIPTING --> STORYBOARD
-    STORYBOARD --> VOICEOVER
-    VOICEOVER --> VIDEO_ASSEMBLY
-    VIDEO_ASSEMBLY --> THUMBNAIL
-    THUMBNAIL --> QA_REVIEW
+    SCRIPTING --> VIDEO_CREATION
+    VIDEO_CREATION --> QA_REVIEW
     QA_REVIEW --> AWAITING_APPROVAL: passed (if human gate enabled)
     QA_REVIEW --> PUBLISHING: passed (if gate disabled)
     QA_REVIEW --> FAILED_QA: failed, retry budget remaining
@@ -86,15 +95,31 @@ stateDiagram-v2
     AWAITING_APPROVAL --> PUBLISHING: approved
     AWAITING_APPROVAL --> REJECTED: rejected
     PUBLISHING --> PUBLISHED
-    PUBLISHED --> PERFORMANCE_TRACKING: recurring, does not block pipeline
     IDEATION --> REJECTED: idea rejected
 ```
 
+`VIDEO_CREATION` is a single `ProjectStage` value covering what used to be
+four (storyboard, voice-over, video assembly, thumbnail) — those are now
+internal modules of one Video Agent job (§1.2), so the Manager tracks and
+retries "video creation" as one unit rather than four independently
+retryable stages (see services/agent_video/app/video_agent.py for the
+trade-off that implies).
+
 `FAILED_QA` routes back to the stage the QA report identifies as the likely
-cause (e.g. audio sync issues → `VOICEOVER`, factual/policy issues →
-`SCRIPTING`), bounded by a per-project `retry_count` to prevent infinite loops.
-Once the retry budget is exhausted, the project moves to `NEEDS_HUMAN_REVIEW`
-and generates an alert instead of retrying silently.
+cause (e.g. audio/sync issues or factual/policy issues → `SCRIPTING`,
+which re-triggers the whole `VIDEO_CREATION` stage downstream), bounded by
+a per-project `retry_count` to prevent infinite loops. Once the retry
+budget is exhausted, the project moves to `NEEDS_HUMAN_REVIEW` and
+generates an alert instead of retrying silently.
+
+`PUBLISHED` is this state machine's true terminal state — deliberately
+*not* followed by a `PERFORMANCE_TRACKING` stage or any other
+Manager-tracked transition. Analytics is not part of this diagram at all:
+it runs as an independent, recurring service against every `PUBLISHED`
+project (§1.5, step 9), on its own schedule, with its own success/failure
+handling that never touches `current_stage`, `status`, or `retry_count`
+here. That decoupling is deliberate — a slow or failed analytics pull must
+never be able to affect a video's production status.
 
 ## 1.4 Orchestration pattern: centralized, not choreographed
 
@@ -123,15 +148,23 @@ for centralized observability and the ability to change pipeline behavior
 4. **Orchestrator** either auto-approves top-scored ideas (config-driven) or
    marks them `proposed` for human approval via the dashboard.
 5. On approval, **Orchestrator** creates a `projects` row and enqueues `script`.
-6. Each subsequent agent (`storyboard` → `voiceover` → `video_assembly` →
-   `thumbnail` → `qa`) is invoked the same way: dequeue → do work → write
-   artifacts to `assets`/domain tables + object storage → report result.
+6. **Video Agent** is invoked once for the whole `video_creation` stage:
+   dequeue → run its storyboard, voice-over, assembly, and thumbnail
+   modules in sequence within that one job → write artifacts to
+   `assets`/domain tables + centralized storage (`libs/storage`) → report
+   one result covering all four.
 7. **QA Agent** gates progression to `publishing`.
 8. **Publisher Agent** uploads to YouTube via the Data API, stores the returned
    `youtube_video_id` in `publications`.
-9. **Analytics Agent** runs on its own recurring schedule (independent of the
-   per-video pipeline) pulling metrics for every `PUBLISHED` project and writing
-   time-series rows to `performance_metrics`.
+9. **Analytics Agent** is never dispatched by the Orchestrator/Manager at
+   all. Its own Celery beat process (`agent_analytics_beat`) sweeps every
+   `PUBLISHED` project on a recurring schedule
+   (`ANALYTICS_SWEEP_INTERVAL_HOURS`), independent of the per-video
+   pipeline, pulling metrics and writing time-series rows to
+   `performance_metrics`. A failed or slow analytics pull cannot affect a
+   project's `current_stage`/`status`/`retry_count` — those columns are
+   owned exclusively by the Manager's own workflow (§1.3), which
+   Analytics never touches.
 10. Aggregated performance data feeds back into the Research Agent's scoring
     model (see roadmap, Phase 4) — the system's learning loop.
 
@@ -143,12 +176,17 @@ for centralized observability and the ability to change pipeline behavior
 - **Caddy** (or Traefik) terminates TLS for the admin dashboard, using a
   Hetzner-managed DNS record; the pipeline itself has no public-facing API
   surface beyond OAuth callback endpoints needed for YouTube auth.
-- **PostgreSQL** and **Redis** run as Compose services with named volumes;
-  **MinIO** (S3-compatible) runs as a Compose service backed by a Hetzner
-  Volume, giving an object-storage interface from day one even though
-  everything lives on one box — this makes a later move to Hetzner Object
-  Storage or AWS S3 a config change (endpoint + credentials) rather than a
-  rewrite.
+- **PostgreSQL** and **Redis** run as Compose services with named volumes.
+  Media assets go through `libs/storage`'s backend interface
+  (`StorageBackend`), keyed by project id; only a local-filesystem backend
+  exists today (a bind-mounted directory on the VPS, per `STORAGE_ROOT`).
+  **MinIO** (S3-compatible) is the documented upgrade path — adding a
+  `MinioStorageBackend` behind the same interface and a Compose service
+  backed by a Hetzner Volume — once a real media-producing agent needs
+  durable object storage beyond one VPS's disk; this makes that move (or
+  a later one to Hetzner Object Storage/AWS S3) a config change
+  (`STORAGE_BACKEND` + endpoint/credentials) rather than a rewrite of
+  every agent that writes media.
 - Nightly `pg_dump` + MinIO bucket sync to off-VPS storage (Hetzner Storage
   Box or Backblaze B2) via a `backup` sidecar/cron container — see
   [Roadmap, Phase 5](./06-roadmap.md).
@@ -157,7 +195,7 @@ for centralized observability and the ability to change pipeline behavior
   Compose `secrets:` can replace this later if multi-host deployment is ever
   needed.
 - Each agent is its own Compose service/image so it can be scaled
-  independently (`docker compose up --scale agent_video_assembly=2`) and so a
+  independently (`docker compose up --scale agent_video=2`) and so a
   crash or dependency upgrade in one agent (e.g. an ffmpeg version bump) never
   requires rebuilding the others.
 

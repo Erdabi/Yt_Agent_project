@@ -13,7 +13,7 @@ from libs.core.config import get_settings
 from libs.core.db import sync_session_scope
 from libs.core.logging import bind_job_context, clear_job_context, get_logger
 from libs.models.channel import Channel
-from libs.models.enums import IdeaStatus, JobStatus, ProjectStatus
+from libs.models.enums import IdeaStatus, JobStatus, ProjectStage, ProjectStatus
 from libs.models.idea import VideoIdea
 from libs.models.job import Job
 from libs.models.project import Project
@@ -143,7 +143,7 @@ class ManagerAgent:
     def _apply(self, project_id: str, action: str, upcoming: WorkflowStep | None) -> None:
         if action == WorkflowAction.ADVANCE:
             if upcoming is None:
-                self._set_status(project_id, ProjectStatus.COMPLETED)
+                self._complete(project_id)
             else:
                 self._advance(project_id, upcoming)
         elif action == WorkflowAction.RETRY:
@@ -160,6 +160,20 @@ class ManagerAgent:
             project.status = ProjectStatus.IN_PROGRESS
             project.retry_count = 0
         dispatch_step(project_id, step, {})
+
+    def _complete(self, project_id: str) -> None:
+        """Publishing was the last step in WORKFLOW and it succeeded.
+        Explicitly move `current_stage` to `PUBLISHED` rather than leaving
+        it at `PUBLISHING` — this is the pipeline's real terminal marker,
+        not just a status flag. Analytics does not run from here: it picks
+        up already-`PUBLISHED` projects on its own schedule (see
+        services/agent_analytics), so completing the pipeline never
+        dispatches anything further.
+        """
+        with sync_session_scope() as session:
+            project = session.get(Project, UUID(project_id))
+            project.current_stage = ProjectStage.PUBLISHED
+            project.status = ProjectStatus.COMPLETED
 
     def _retry(self, project_id: str) -> None:
         with sync_session_scope() as session:

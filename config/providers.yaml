@@ -1,0 +1,80 @@
+# Which concrete class backs each swappable capability, and its
+# non-secret parameters. Loaded by libs/providers/registry.py (path
+# configurable via PROVIDERS_CONFIG_PATH — see .env.example). Switching a
+# provider — e.g. Runway for Pika, ElevenLabs for Azure Speech — means
+# editing an "active" line below, not a code change
+# (docs/architecture/05-technology-choices.md §5.2).
+#
+# `secret_ref` names an environment variable holding the API key — never
+# the key itself, the same convention `provider_configs.secret_ref` uses
+# in the database (libs/models/provider.py, libs/schemas doc §4.4).
+#
+# Every "active" provider below is currently the stub implementation:
+# this file's job is to prove the switching mechanism works end to end
+# (yaml -> registry -> dynamically-imported, instantiated class), not to
+# claim a real vendor integration exists yet. Each capability's
+# stub_provider.py raises NotImplementedError honestly instead. Adding a
+# real provider is: write the class under libs/providers/<capability>/,
+# add an entry for it here, and flip "active" — see the commented example
+# under each capability below.
+
+video_gen:
+  active: stub
+  providers:
+    stub:
+      class: libs.providers.video_gen.stub_provider.StubVideoGenProvider
+      config: {}
+  # Real provider example (Runway, docs/architecture/05-technology-choices.md
+  # §5.2 — Phase 2+): add libs/providers/video_gen/runway_provider.py
+  # subclassing VideoGenProvider, then:
+  #   runway:
+  #     class: libs.providers.video_gen.runway_provider.RunwayProvider
+  #     config: {model: gen-3}
+  #     secret_ref: RUNWAY_API_KEY
+  # and set active: runway.
+
+tts:
+  active: stub
+  providers:
+    stub:
+      class: libs.providers.tts.stub_provider.StubTTSProvider
+      config: {}
+  # Real provider example (ElevenLabs — Phase 1): add
+  # libs/providers/tts/elevenlabs_provider.py subclassing TTSProvider, then:
+  #   elevenlabs:
+  #     class: libs.providers.tts.elevenlabs_provider.ElevenLabsProvider
+  #     config: {voice_id: ""}
+  #     secret_ref: ELEVENLABS_API_KEY
+  # and set active: elevenlabs.
+
+image_gen:
+  active: stub
+  providers:
+    stub:
+      class: libs.providers.image_gen.stub_provider.StubImageGenProvider
+      config: {}
+  # Real provider example (Stability AI — Phase 1/4): add
+  # libs/providers/image_gen/stability_provider.py subclassing
+  # ImageGenProvider, then:
+  #   stability:
+  #     class: libs.providers.image_gen.stability_provider.StabilityProvider
+  #     config: {model: stable-image-ultra}
+  #     secret_ref: STABILITY_API_KEY
+  # and set active: stability.
+
+youtube:
+  active: stub
+  providers:
+    stub:
+      class: libs.providers.youtube.stub_provider.StubYouTubePublisher
+      config: {}
+  # Real provider (YouTube Data API v3 — Phase 1/3). There's only one real
+  # YouTube, but keeping it behind this interface still lets local dev/tests
+  # use the stub instead of touching the real API and its quota. Add
+  # libs/providers/youtube/data_api_provider.py subclassing YouTubePublisher,
+  # then:
+  #   youtube_data_api:
+  #     class: libs.providers.youtube.data_api_provider.YouTubeDataAPIPublisher
+  #     config: {}
+  #     secret_ref: YOUTUBE_OAUTH_CLIENT_SECRET
+  # and set active: youtube_data_api.

@@ -184,8 +184,14 @@ partitioning once volume grows.
 | retrieved_at | timestamptz | |
 
 ### `provider_configs`
-Drives the provider-swap requirement — which concrete provider backs each AI
-capability, in priority order (for fallback).
+Drives *per-channel* provider selection — which concrete provider backs each
+AI capability for a given channel, in priority order (for fallback). This
+is a different, complementary layer to `config/providers.yaml`
+(`libs/providers/registry.py`): the YAML file declares *which
+implementations exist* as importable classes and the process-wide
+default; this table tracks a per-channel *active choice* by name among
+whatever the YAML defines, plus usage/cost logging below. `provider_name`
+here is expected to match a name declared for that capability in the YAML.
 
 | column | type | notes |
 |---|---|---|

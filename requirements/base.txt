@@ -16,3 +16,6 @@ celery==5.4.0
 redis==5.2.0
 
 sentry-sdk==2.18.0
+
+# libs/providers' config-file-driven provider registry (config/providers.yaml)
+PyYAML==6.0.2

@@ -81,6 +81,34 @@ class Settings(BaseSettings):
     anthropic_model: str = Field(default="claude-opus-5", alias="ANTHROPIC_MODEL")
     anthropic_effort: str = Field(default="low", alias="ANTHROPIC_EFFORT")
 
+    # --- Analytics Agent: independent scheduling -------------------------
+    # How often the Analytics Agent's own Celery beat schedule sweeps
+    # `PUBLISHED` projects (services/agent_analytics/app/worker.py). Not
+    # read by the Manager at all — analytics runs decoupled from the
+    # per-video pipeline (docs/architecture/01-system-architecture.md §1.5).
+    analytics_sweep_interval_hours: int = Field(
+        default=6, alias="ANALYTICS_SWEEP_INTERVAL_HOURS"
+    )
+
+    # --- Centralized asset storage (libs/storage) -------------------------
+    # Every media artifact an agent produces is written here, keyed by
+    # project id. Only "local" exists today; the interface (libs/storage/base.py)
+    # is designed so a future S3/MinIO backend is a config change here, not
+    # a rewrite of every agent that writes media.
+    storage_backend: Literal["local"] = Field(default="local", alias="STORAGE_BACKEND")
+    storage_root: str = Field(default="data", alias="STORAGE_ROOT")
+
+    # --- Provider configuration system (libs/providers) --------------------
+    # Path to the config file declaring which concrete provider class
+    # backs each swappable capability (video generation, TTS, image
+    # generation, YouTube) and its non-secret parameters — see
+    # libs/providers/registry.py. Distinct from the `provider_configs` DB
+    # table, which tracks a per-channel *active* choice among the names
+    # this file defines.
+    providers_config_path: str = Field(
+        default="config/providers.yaml", alias="PROVIDERS_CONFIG_PATH"
+    )
+
     @computed_field  # type: ignore[misc]
     @property
     def database_url(self) -> str:

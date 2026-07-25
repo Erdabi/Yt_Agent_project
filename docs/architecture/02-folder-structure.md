@@ -16,16 +16,19 @@ yt-agent/
 │   ├── architecture/                 # this design doc set
 │   └── adr/                          # architecture decision records (one file per significant decision)
 │
+├── config/
+│   └── providers.yaml                # which concrete class backs each swappable capability (libs/providers)
+│
 ├── services/                         # one folder per deployable container
 │   ├── orchestrator/
 │   │   ├── Dockerfile
 │   │   ├── pyproject.toml
 │   │   └── app/
 │   │       ├── main.py               # FastAPI app (internal API + dashboard backend)
-│   │       ├── state_machine.py      # pipeline stage transitions + retry policy
-│   │       ├── scheduler.py          # Celery beat schedules (ideation cadence, analytics pulls)
-│   │       ├── approval_gates.py     # config-driven human-in-the-loop rules
-│   │       └── api/                  # routers: projects, ideas, jobs, approvals
+│   │       ├── manager/              # the Manager Agent: workflow plan, dispatcher, Claude
+│   │       │                         # reasoning engine, state transitions — see 03-agent-responsibilities.md §3.1
+│   │       ├── approval_gates.py     # config-driven human-in-the-loop rules (phase 2)
+│   │       └── api/                  # routers: projects, ideas, jobs, goals, approvals
 │   │
 │   ├── agent_research/
 │   │   ├── Dockerfile
@@ -38,17 +41,17 @@ yt-agent/
 │   ├── agent_scriptwriter/
 │   │   └── app/{worker.py, prompts/, fact_check.py}
 │   │
-│   ├── agent_storyboard/
-│   │   └── app/{worker.py, shot_planner.py, stock_search.py}
-│   │
-│   ├── agent_voiceover/
-│   │   └── app/{worker.py, ssml_builder.py, loudness_normalize.py}
-│   │
-│   ├── agent_video_assembly/
-│   │   └── app/{worker.py, compositor.py, captions.py, ffmpeg_pipeline.py}
-│   │
-│   ├── agent_thumbnail/
-│   │   └── app/{worker.py, text_overlay.py, style_guide.py}
+│   ├── agent_video/                  # one agent, four internal modules — replaces what used to be
+│   │   │                             # four separate services/stages (storyboard, voiceover,
+│   │   │                             # video assembly, thumbnail); see 03-agent-responsibilities.md §3.4
+│   │   └── app/
+│   │       ├── worker.py             # Celery task entrypoint (queue: video)
+│   │       ├── video_agent.py        # VideoAgent.run() calls the four modules below in sequence
+│   │       └── modules/
+│   │           ├── storyboard.py     # shot_planner + stock_search logic lives here
+│   │           ├── voiceover.py      # ssml_builder + loudness_normalize logic lives here
+│   │           ├── assembly.py       # compositor + captions + ffmpeg_pipeline logic lives here
+│   │           └── thumbnail.py      # text_overlay + style_guide logic lives here
 │   │
 │   ├── agent_qa/
 │   │   └── app/{worker.py, technical_checks.py, policy_review.py}
@@ -56,8 +59,11 @@ yt-agent/
 │   ├── agent_publisher/
 │   │   └── app/{worker.py, youtube_upload.py, oauth_token_manager.py, quota_guard.py}
 │   │
-│   ├── agent_analytics/
-│   │   └── app/{worker.py, youtube_analytics_client.py, aggregation.py}
+│   ├── agent_analytics/              # NOT dispatched by the Manager — see 03-agent-responsibilities.md §3.9
+│   │   └── app/
+│   │       ├── worker.py             # AnalyticsAgent + the sweep task + its own beat_schedule
+│   │       ├── youtube_analytics_client.py
+│   │       └── aggregation.py
 │   │
 │   └── dashboard/                    # phase 2 — thin FastAPI+HTMX admin UI (or served by orchestrator/api)
 │
@@ -66,18 +72,23 @@ yt-agent/
 │   │   ├── config.py                 # Pydantic Settings base classes
 │   │   ├── logging.py                # structlog setup, shared JSON formatter
 │   │   ├── db.py                     # SQLAlchemy async engine/session factory
-│   │   └── celery_app.py             # shared Celery app factory + task base class (retry/backoff defaults)
+│   │   └── celery_app.py             # shared Celery app factory + task base class
 │   │
-│   ├── providers/                    # the swappable AI-provider abstraction layer
-│   │   ├── llm/{base.py, anthropic_provider.py, openai_provider.py, registry.py}
-│   │   ├── tts/{base.py, elevenlabs_provider.py, azure_provider.py, registry.py}
-│   │   ├── image_gen/{base.py, stability_provider.py, openai_image_provider.py, registry.py}
-│   │   ├── video_gen/{base.py, runway_provider.py, registry.py}
-│   │   ├── stock_media/{base.py, pexels_provider.py, pixabay_provider.py, registry.py}
-│   │   └── youtube/{data_api_client.py, analytics_api_client.py}
+│   ├── agents/
+│   │   └── base.py                   # BaseAgent: execute_job, Manager notification, reports_to_manager flag
 │   │
-│   ├── storage/                      # media storage abstraction (local volume / MinIO / S3)
-│   │   └── {base.py, minio_backend.py, local_backend.py}
+│   ├── providers/                    # the swappable AI-provider abstraction layer, config-file-driven
+│   │   ├── base.py                   # Provider marker + ProviderConfigError
+│   │   ├── registry.py               # get_provider(capability) -> instance, reads config/providers.yaml
+│   │   ├── video_gen/{base.py, stub_provider.py}
+│   │   ├── tts/{base.py, stub_provider.py}
+│   │   ├── image_gen/{base.py, stub_provider.py}
+│   │   └── youtube/{base.py, stub_provider.py}
+│   │
+│   ├── storage/                      # centralized asset storage, keyed by project id
+│   │   ├── base.py                   # StorageBackend interface
+│   │   ├── local_backend.py          # the only backend that exists today
+│   │   └── registry.py               # get_storage_backend(), reads STORAGE_BACKEND/STORAGE_ROOT
 │   │
 │   ├── models/                       # SQLAlchemy ORM models, shared across all services
 │   └── schemas/                      # Pydantic DTOs shared between orchestrator and agents (job payloads/results)
@@ -110,8 +121,11 @@ yt-agent/
   another's build.
 - **`libs/` is the only place cross-service code lives.** Every service installs
   it as an editable local dependency at build time. This is what makes the
-  provider-swap requirement real: an agent never imports `openai` or
-  `elevenlabs` directly, it imports `libs.providers.llm.registry.get_llm_provider()`.
+  provider-swap requirement real: an agent never imports `runwayml` or
+  `elevenlabs` directly, it calls `libs.providers.registry.get_provider("tts")`,
+  which resolves the active implementation from `config/providers.yaml` —
+  one shared registry function generic over capability, rather than a
+  separate `registry.py` duplicated under every provider subfolder.
 - **`libs/schemas/` defines job payload/result contracts.** Since agents
   communicate only via queue messages and DB rows, these Pydantic models are the
   actual "API" between the Orchestrator and each agent — versioned and tested

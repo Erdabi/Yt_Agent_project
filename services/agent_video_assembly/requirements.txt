@@ -1,4 +1,0 @@
--r ../../requirements/base.txt
-
-# No agent-specific dependencies yet — added when this agent's real
-# provider/library integration lands (see docs/architecture/06-roadmap.md).

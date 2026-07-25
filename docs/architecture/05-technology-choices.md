@@ -18,10 +18,21 @@
 
 Every capability below is accessed through an internal interface in
 `libs/providers/<capability>/base.py`; concrete providers implement that
-interface, and `provider_configs` (database-backed, see
-[Database Design §4.2](./04-database-design.md#core-tables)) selects which one
-is active, in priority order, per capability. Swapping providers — or adding a
-fallback chain — is a config/database change, never a code change in an agent.
+interface, and `libs/providers/registry.py` selects which one is active by
+reading `config/providers.yaml` — one file, one `active:` line per
+capability, plus the non-secret parameters and `secret_ref` for each
+registered provider (path configurable via `PROVIDERS_CONFIG_PATH`). This
+is the process-wide default; `provider_configs` (database-backed, see
+[Database Design §4.2](./04-database-design.md#core-tables)) can override
+it per channel by name, plus track priority order and usage/cost logging.
+Swapping providers — or adding a fallback chain — is a config file (or
+database) change, never a code change in an agent.
+
+Only the `stub` implementation is registered for each capability today —
+enough to prove the switching mechanism (YAML → dynamic import →
+instantiated class) is real and testable without fabricating an actual
+vendor integration. Adding a real provider is: write the class, register
+it in the YAML under that capability, flip `active:` to its name.
 
 | Capability | Primary choice | Fallback | Notes |
 |---|---|---|---|
@@ -60,11 +71,15 @@ to the next-priority provider after N consecutive failures — logged as a
   variable with a placeholder. Docker Compose `secrets:` is a documented
   upgrade path if the deployment ever needs tighter secret isolation than a
   mounted env file.
-- **Provider selection lives in the database** (`provider_configs`), not in
-  env vars — this is what lets an operator swap the active LLM/TTS/image
-  provider from the admin dashboard without a redeploy. Env vars hold the
-  actual API keys (`secret_ref` in the table points at the var name); the
-  database holds which provider is active and its non-secret parameters.
+- **Which provider implementations exist, and the default active one per
+  capability, lives in `config/providers.yaml`** (§5.2) — not env vars, so
+  registering a new provider or changing the process-wide default doesn't
+  require a schema change. **Per-channel overrides live in the database**
+  (`provider_configs`) — this is what lets an operator swap a specific
+  channel's active LLM/TTS/image provider from the admin dashboard without
+  a redeploy. Env vars hold only the actual API keys (`secret_ref`, in
+  both the YAML and the table, points at the var name, never the key
+  itself).
 
 ## 5.5 Testing & CI/CD
 
