@@ -69,6 +69,26 @@ services:
       redis:
         condition: service_healthy
 
+  # The Manager Agent's own worker process — consumes the `manager` queue
+  # that every agent notifies on completion (see
+  # libs/agents/base.py:BaseAgent._notify_manager). Built from the same
+  # image as `orchestrator` (same code, same dependencies including the
+  # Anthropic SDK) with a different command, exactly like `migrate` above.
+  manager_worker:
+    build:
+      context: .
+      dockerfile: services/orchestrator/Dockerfile
+    command: ["celery", "-A", "app.manager.tasks:celery_app", "worker", "--loglevel=info", "-Q", "manager", "--concurrency=2"]
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - SERVICE_NAME=manager_worker
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
   agent_research:
     build:
       context: .

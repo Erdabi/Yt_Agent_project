@@ -54,17 +54,32 @@ class Settings(BaseSettings):
     redis_broker_db: int = Field(default=0, alias="REDIS_BROKER_DB")
     redis_result_backend_db: int = Field(default=1, alias="REDIS_RESULT_BACKEND_DB")
 
-    # --- Job/agent execution policy ------------------------------------
-    # Shared defaults for the agent framework's retry behavior (libs/agents/base.py).
-    # An individual agent task can still override these per-call.
+    # --- Manager Agent: workflow retry policy ---------------------------
+    # A worker agent's job is attempted exactly once per Celery task (see
+    # libs/agents/base.py) — retrying a failed *stage* is a decision the
+    # Manager Agent's reasoning engine makes (services/orchestrator/app/manager),
+    # not something Celery does automatically. This bounds that decision:
+    # once a project's Project.retry_count reaches this value, the Manager
+    # escalates instead of retrying again, regardless of what the reasoning
+    # engine's own judgment would otherwise choose.
     job_max_retries: int = Field(default=3, alias="JOB_MAX_RETRIES")
-    job_retry_backoff_seconds: int = Field(default=10, alias="JOB_RETRY_BACKOFF_SECONDS")
 
     # --- Error tracking ---------------------------------------------------
     # Left unset (None) in local development; every deployed environment
     # should set this. Left optional here rather than required so the
     # stack can boot locally without a Sentry account.
     sentry_dsn: str | None = Field(default=None, alias="SENTRY_DSN")
+
+    # --- Manager Agent: Claude reasoning engine ---------------------------
+    # Used by services/orchestrator/app/manager/reasoning.py to decide
+    # advance/retry/escalate/abort at every stage transition. Left optional
+    # so the stack still boots without a key — the Manager falls back to a
+    # deterministic rule (see reasoning.py) rather than failing outright,
+    # since a reasoning-engine outage must never be able to wedge the
+    # pipeline.
+    anthropic_api_key: str | None = Field(default=None, alias="ANTHROPIC_API_KEY")
+    anthropic_model: str = Field(default="claude-opus-5", alias="ANTHROPIC_MODEL")
+    anthropic_effort: str = Field(default="low", alias="ANTHROPIC_EFFORT")
 
     @computed_field  # type: ignore[misc]
     @property

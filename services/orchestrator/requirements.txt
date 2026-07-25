@@ -2,3 +2,8 @@
 
 fastapi==0.115.5
 uvicorn[standard]==0.32.1
+
+# Manager Agent's reasoning engine (app/manager/reasoning.py) — the only
+# service that calls the Claude API. Also needed by the manager_worker
+# Compose service, which reuses this same image.
+anthropic==0.120.0

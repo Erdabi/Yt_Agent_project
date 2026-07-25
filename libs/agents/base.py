@@ -16,6 +16,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from typing import Any
 
+from libs.core.celery_app import celery_app
 from libs.core.db import sync_session_scope
 from libs.core.logging import bind_job_context, clear_job_context, get_logger
 from libs.models.enums import JobStatus
@@ -37,13 +38,15 @@ class BaseAgent(ABC):
         """Do the agent's actual work and return a JSON-serializable result.
 
         Must raise on failure. Returning an error sentinel instead of
-        raising would hide the failure from both the retry mechanism and
-        the `jobs.error` audit trail.
+        raising would hide the failure from both the Manager Agent's
+        retry/escalate decision and the `jobs.error` audit trail.
         """
 
     def execute_job(self, job_id: str) -> dict[str, Any]:
         """Load `job_id`, run it, and record the outcome — success or
-        failure — back onto the same row.
+        failure — back onto the same row. Every call reaches a terminal
+        status (`SUCCEEDED` or `FAILED`) and then notifies the Manager
+        Agent, whether `run()` succeeded or raised.
         """
         context, attempt_count = self._mark_running(job_id)
 
@@ -66,6 +69,7 @@ class BaseAgent(ABC):
             self._mark_finished(job_id, result=result)
             return result
         finally:
+            self._notify_manager(job_id)
             clear_job_context()
 
     def _mark_running(self, job_id: str) -> tuple[JobContext, int]:
@@ -106,13 +110,23 @@ class BaseAgent(ABC):
                 job.result = result or {}
             else:
                 job.error = error
-                # Whether this failure is terminal depends on how many
-                # attempts remain — the same bound Celery's retry wrapper
-                # uses (see AgentTask.autoretry_for in libs/core/celery_app.py),
-                # so the two stay consistent without cross-referencing
-                # Celery's own retry counter.
-                job.status = (
-                    JobStatus.RETRYING
-                    if job.attempt_count < job.max_attempts
-                    else JobStatus.FAILED
-                )
+                job.status = JobStatus.FAILED
+
+    def _notify_manager(self, job_id: str) -> None:
+        """Tell the Manager Agent this job has reached a terminal state, so
+        it can decide the next step (advance/retry/escalate/abort).
+
+        Sent by task *name* on the shared broker — not a Python import of
+        the orchestrator's code — so an agent never depends on the
+        Manager's implementation, only on its queue name and task name.
+        This is the whole "agent communication system": agents don't call
+        the Manager, they report to it through the same broker it already
+        uses to dispatch them.
+
+        Never allowed to raise: a transient broker hiccup here must not
+        mask the real result `execute_job` already recorded above.
+        """
+        try:
+            celery_app.send_task("manager.advance_workflow", args=[job_id], queue="manager")
+        except Exception as exc:
+            logger.error("manager_notification_failed", error=str(exc))

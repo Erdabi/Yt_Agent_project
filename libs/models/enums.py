@@ -32,6 +32,7 @@ class ProjectStage(str, enum.Enum):
     FAILED_QA = "failed_qa"
     NEEDS_HUMAN_REVIEW = "needs_human_review"
     REJECTED = "rejected"
+    ANALYTICS = "analytics"
 
 
 class ProjectStatus(str, enum.Enum):

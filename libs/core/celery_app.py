@@ -56,20 +56,21 @@ def _configure_worker_logging(**kwargs: object) -> None:
 class AgentTask(Task):
     """Shared base Task for every agent job.
 
-    `autoretry_for`/`retry_backoff*` are read by Celery from this class
-    when a task is registered with `base=AgentTask` — see
-    https://docs.celeryq.dev/en/stable/userguide/tasks.html#automatic-retry-for-known-exceptions.
+    Deliberately does **not** auto-retry when an agent's `run()` raises.
+    Whether a failed stage is worth retrying is a judgment call the
+    Manager Agent's reasoning engine makes after the fact (see
+    services/orchestrator/app/manager) — an automatic Celery-level retry
+    would make that call invisibly and race with the Manager's own
+    retry-by-redispatch, so this task fails once and reports back (see
+    BaseAgent._notify_manager in libs/agents/base.py). Worker-crash
+    resilience is handled separately, above, by `task_acks_late` +
+    `task_reject_on_worker_lost` — a different concern from an agent's own
+    logic failing.
     """
-
-    autoretry_for = (Exception,)
-    retry_backoff = True
-    retry_backoff_max = settings.job_retry_backoff_seconds * 10
-    retry_jitter = True
-    max_retries = settings.job_max_retries
 
     def on_failure(self, exc: BaseException, task_id: str, args: tuple, kwargs: dict, einfo: object) -> None:
         get_logger(__name__).error(
-            "celery_task_failed_terminally",
+            "celery_task_failed",
             task_id=task_id,
             task_name=self.name,
             error=str(exc),
