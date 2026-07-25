@@ -43,19 +43,58 @@ Any agent that calls an LLM loads its prompt from a versioned template file
 
 ## 3.2 Research / Ideation Agent
 
-- **Input:** channel config (niche, persona, banned topics, content cadence).
-- **Does:** pulls trend signals (YouTube trending API, Google Trends, Reddit,
-  configured RSS feeds), clusters and scores candidate topics with an LLM call
-  against the channel's persona and past performance data, and checks each
-  candidate for semantic duplication against previously produced videos
-  (embedding similarity, pgvector).
-- **Output:** ranked `video_ideas` rows (title candidates, target keywords,
-  rationale, confidence score).
-- **Failure mode:** a trend source being unreachable is non-fatal — the agent
-  degrades to fewer sources rather than failing the whole run; an LLM scoring
-  failure fails the job and is retried with backoff.
-- **Prompt:** `prompts/research/idea_scoring/` (draft — not wired into real
-  code yet, see §6 Phase 1).
+Its only responsibility is finding high-potential video ideas — it doesn't
+write scripts, produce media, or make publishing decisions. Implemented
+(services/agent_research), unlike most other agents at this point, and
+runs in one of two modes:
+
+- **Enrich mode** (Manager-dispatched, one project at a time): the Manager
+  already created a `Project` and a `VideoIdea` row for a human-submitted
+  goal (`ManagerAgent.receive_goal`, §3.1) before this job runs. The agent
+  elaborates on that one goal — trend context, keywords, audience, angle,
+  competition, score, length, notes — and updates the same row.
+- **Discover mode** (channel-level, no project yet): generates several new
+  candidate ideas from trend signals/seed topics and inserts each as a new
+  `video_ideas` row (`status=proposed`, awaiting approval). Dispatched via
+  `agents.research.discover`, not by the Manager — nothing schedules this
+  automatically yet (the "daily ideation run per channel" from
+  [System Architecture §1.5](./01-system-architecture.md), step 1, is a
+  natural follow-up once something calls it).
+
+- **Input:** channel config (niche, persona, banned topics, seed topics —
+  read from `Channel.persona_config`), plus a specific goal (enrich mode)
+  or a seed-topic/count request (discover mode).
+- **Does:**
+  - **Analyzes trends** via a pluggable set of trend sources
+    (`trend_sources/`): only a configured seed-topic list is real today
+    (`seed_list.py`) — YouTube Trending, Google Trends, Reddit, and RSS
+    are honest `NotImplementedError` stubs, landing in Phase 4 (live
+    scraping). A source being unavailable is non-fatal: the aggregator
+    degrades to fewer sources rather than failing the run.
+  - **Generates topics and scores them** in one call to Claude
+    (`idea_generator.py`, forced tool use, prompts loaded from
+    `prompts/research/` via `libs/prompts`) — topic, target audience, why
+    people would watch, keywords, suggested angle, competition level,
+    score, suggested length, and research notes, all from one structured
+    response. There is no deterministic fallback here (unlike the
+    Manager's reasoning engine): a missing key, API failure, refusal, or
+    malformed response all raise and fail the job honestly — inventing a
+    placeholder idea would defeat the entire point of this agent.
+  - **Avoids duplicate content** with a lexical similarity check
+    (`dedup.py`: title similarity + keyword overlap against this
+    channel's existing ideas) — not yet the embedding/pgvector semantic
+    search in the original design (§4.2 below); that needs a real
+    embedding provider, which isn't configured. A likely duplicate is
+    still stored (a human can judge it) with a note and a capped score,
+    not silently dropped.
+- **Output:** `video_ideas` rows — topic (`title`), `target_audience`,
+  `rationale` (why people would watch), `keywords`, `suggested_angle`,
+  `competition_level`, `score`, `suggested_length_sec`, `research_notes`.
+- **Failure mode:** a trend source being unreachable is non-fatal (see
+  above); an idea-generation failure fails the job, which the Manager's
+  reasoning engine then retries or escalates like any other agent failure.
+- **Prompt:** `prompts/research/generate_ideas_system/` (with a
+  Claude-specific override) and `prompts/research/generate_ideas_user/`.
 
 ## 3.3 Script Writing Agent
 

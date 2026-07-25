@@ -92,3 +92,14 @@ class ProviderCapability(str, enum.Enum):
     IMAGE_GEN = "image_gen"
     VIDEO_GEN = "video_gen"
     STOCK_MEDIA = "stock_media"
+
+
+class CompetitionLevel(str, enum.Enum):
+    """How saturated a video idea's specific angle already is on YouTube —
+    set by the Research Agent (services/agent_research), not a measure of
+    production difficulty.
+    """
+
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"

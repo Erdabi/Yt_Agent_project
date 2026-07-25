@@ -1,4 +1,5 @@
 -r ../../requirements/base.txt
 
-# No agent-specific dependencies yet — added when this agent's real
-# provider/library integration lands (see docs/architecture/06-roadmap.md).
+# The Research Agent's idea generation (app/idea_generator.py) calls the
+# Claude API directly, same as the Manager Agent's reasoning engine.
+anthropic==0.120.0

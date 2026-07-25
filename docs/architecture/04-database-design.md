@@ -51,13 +51,18 @@ only one is used initially.
 |---|---|---|
 | id | uuid PK | |
 | channel_id | uuid FK → channels | |
-| title | text | |
-| description | text | |
+| title | text | the idea's topic |
+| description | text | unused today — left for a fuller synopsis later |
 | keywords | text[] | |
-| source | text | e.g. `youtube_trending`, `google_trends`, `manual` |
-| score | numeric | ranking output from Research Agent |
-| rationale | text | why the LLM scored it this way |
-| embedding | vector(1536) | pgvector, for dedup against past ideas/videos |
+| source | text | `goal` (human-submitted), `research_agent` (discover mode) |
+| score | numeric | 0-100 confidence from the Research Agent, capped when flagged as a likely duplicate |
+| rationale | text | why people would watch this |
+| target_audience | text | who specifically would watch this |
+| suggested_angle | text | the creative hook, not a restatement of the topic |
+| competition_level | enum | `low`, `medium`, `high` — how saturated this angle already is on YouTube, not production difficulty |
+| suggested_length_sec | int | |
+| research_notes | text | what informed the idea — trend signals, tradeoffs, duplicate-content warnings |
+| embedding | vector(1536) | pgvector — stays null today; no embedding provider is wired in yet, so duplicate detection is a lexical heuristic instead (services/agent_research/app/dedup.py) |
 | status | enum | `proposed`, `approved`, `rejected` |
 | created_at | timestamptz | |
 

@@ -65,13 +65,17 @@ types.
 ## What's here today
 
 - `manager/` — the Manager Agent's reasoning engine
-  (`services/orchestrator/app/manager/reasoning.py`), the one real,
-  currently-in-use integration. `workflow_decision_system` has a
-  Claude-specific override (`v1.claude.yaml`) demonstrating the
-  provider-override mechanism; `workflow_decision_user` demonstrates
-  variables and conditionals.
-- `research/`, `script/`, `video/`, `qa/` — draft `v1` templates for each
-  agent's future LLM call, grounded in
+  (`services/orchestrator/app/manager/reasoning.py`). `workflow_decision_system`
+  has a Claude-specific override (`v1.claude.yaml`); `workflow_decision_user`
+  demonstrates variables and conditionals.
+- `research/` — the Research Agent's idea generation
+  (`services/agent_research/app/idea_generator.py`), the second real
+  integration. `generate_ideas_system` has a Claude-specific override the
+  same way the Manager's does; `generate_ideas_user` demonstrates loops
+  and filters (`{% for %}`, `| join(", ")`) on top of variables and
+  conditionals.
+- `script/`, `video/`, `qa/` — draft `v1` templates for each agent's
+  future LLM call, grounded in
   `docs/architecture/03-agent-responsibilities.md`. Not wired into any
   real code yet: those agents' `run()` methods still raise
   `NotImplementedError` (see `docs/architecture/06-roadmap.md` for when

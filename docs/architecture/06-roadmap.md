@@ -39,7 +39,15 @@ for a single developer, not commitments.
   sophistication yet). **Done**, including the Claude-backed reasoning
   engine and deterministic fallback.
 - Research Agent: manual/seed topic list + one LLM call to expand into
-  scored ideas (live trend scraping deferred to Phase 4).
+  scored ideas (live trend scraping deferred to Phase 4). **Done** —
+  trend analysis, topic generation, lexical duplicate-content checking,
+  scoring, audience/angle/competition-level/length/notes output, both in
+  Manager-dispatched (enrich one goal) and channel-level (discover
+  several) modes. Live trend scraping (YouTube Trending/Google
+  Trends/Reddit/RSS) and embedding-based semantic dedup remain Phase 4,
+  as originally planned; automatic scheduling for discover mode (a daily
+  ideation run per channel) is unbuilt too — it's callable today but
+  nothing calls it on a cadence yet.
 - Script Agent with one real LLM provider.
 - Video Agent's modules land one real implementation at a time, in-process
   (no separate agents/queues to coordinate — see

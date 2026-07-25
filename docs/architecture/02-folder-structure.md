@@ -22,7 +22,7 @@ yt-agent/
 ├── prompts/                          # versioned prompt template files, loaded via libs/prompts —
 │   │                                 # never embedded as Python string constants — see prompts/README.md
 │   ├── manager/{workflow_decision_system/, workflow_decision_user/}
-│   ├── research/idea_scoring/
+│   ├── research/{generate_ideas_system/, generate_ideas_user/}
 │   ├── script/generate_script/
 │   ├── video/{storyboard_shot_planning/, thumbnail_prompt/}
 │   └── qa/policy_review/
@@ -38,13 +38,14 @@ yt-agent/
 │   │       ├── approval_gates.py     # config-driven human-in-the-loop rules (phase 2)
 │   │       └── api/                  # routers: projects, ideas, jobs, goals, approvals
 │   │
-│   ├── agent_research/
+│   ├── agent_research/                # implemented — see 03-agent-responsibilities.md §3.2
 │   │   ├── Dockerfile
 │   │   └── app/
-│   │       ├── worker.py             # Celery task entrypoint
-│   │       ├── trend_sources/        # youtube_trending.py, google_trends.py, reddit.py, rss.py
-│   │       └── scoring.py            # LLM-based idea scoring + dedup via embeddings
-│   │                                 # (its prompt lives in prompts/research/, not here)
+│   │       ├── worker.py             # ResearchAgent (enrich one goal / discover several), Celery tasks
+│   │       ├── idea_generator.py     # the Claude call (forced tool use, prompts from prompts/research/)
+│   │       ├── dedup.py              # lexical duplicate-content check (title + keyword overlap)
+│   │       └── trend_sources/        # base.py, seed_list.py (real), youtube_trending.py,
+│   │                                 # google_trends.py, reddit.py, rss.py (stubs), aggregator.py
 │   │
 │   ├── agent_scriptwriter/
 │   │   └── app/{worker.py, fact_check.py}

@@ -1,0 +1,25 @@
+template: |
+  Channel niche: {{ channel_niche }}
+  Channel persona / tone: {{ channel_persona }}
+  {% if banned_topics %}Banned topics (never propose these): {{ banned_topics | join(", ") }}
+  {% endif %}
+  {% if trend_signals %}Trend signals to consider:
+  {% for signal in trend_signals %}- {{ signal }}
+  {% endfor %}
+  {% endif %}
+  {% if existing_titles %}Existing ideas for this channel (do not duplicate these):
+  {% for title in existing_titles %}- {{ title }}
+  {% endfor %}
+  {% endif %}
+  {% if goal %}A specific topic has been requested: "{{ goal }}". Propose exactly
+  one idea that elaborates on this topic — do not invent a different one.
+  {% else %}Propose {{ count }} distinct new video idea(s) for this channel.
+  {% endif %}
+metadata:
+  description: >
+    Per-call context for the Research Agent's idea-generation call
+    (services/agent_research/app/idea_generator.py). Variables:
+    channel_niche, channel_persona, banned_topics, trend_signals,
+    existing_titles, goal (optional — omit/None for open-ended
+    discovery), count (used only when goal is not set).
+  owner: research-agent

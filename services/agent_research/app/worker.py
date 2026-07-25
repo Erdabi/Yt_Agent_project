@@ -1,34 +1,292 @@
 """Research / Ideation Agent worker.
 
-Registers the Celery task for the `research` queue. The agent's actual
-work — pulling trend signals, scoring candidate ideas with an LLM call,
-checking for semantic duplication against past videos — is not
-implemented yet. `run()` raises `NotImplementedError` rather than
-returning fabricated ideas; see
-docs/architecture/03-agent-responsibilities.md §3.2 and
-docs/architecture/06-roadmap.md, Phase 1. Its idea-scoring prompt already
-exists at prompts/research/idea_scoring/ (see libs/prompts) — load it via
-`get_prompt_loader().get("research", "idea_scoring")` once this lands.
+The Research Agent's only responsibility: find high-potential YouTube
+video ideas. It runs in one of two modes, both handled by the same
+`run()` method:
+
+- **Enrich mode** (`context.project_id` is set): the Manager dispatched
+  this as the `research` stage of an existing project — see
+  `ManagerAgent.receive_goal` (services/orchestrator/app/manager/manager.py),
+  which already created a `Project` and a `VideoIdea` row (title=goal,
+  status=APPROVED) before this job ever ran. This mode elaborates on that
+  one goal — trend context, keywords, audience, angle, competition,
+  score, suggested length, research notes — and updates the same
+  `VideoIdea` row rather than creating a new one.
+- **Discover mode** (`context.project_id` is `None`, `payload["channel_id"]`
+  set instead): a channel-level ideation run with no project yet —
+  generates several new candidate ideas from trend signals/seed topics and
+  inserts each as a new `VideoIdea` row (status=PROPOSED, awaiting
+  approval). Dispatched via `agents.research.discover` (see the task at
+  the bottom of this file), not by the Manager — `Job.project_id` is
+  nullable specifically for jobs like this one
+  (docs/architecture/04-database-design.md §4.2). Nothing schedules this
+  automatically yet (no Celery beat for it, unlike Analytics's
+  `agent_analytics_beat`) — it's invoked directly today
+  (`celery_app.send_task("agents.research.discover", ...)`), with a
+  recurring "daily ideation run per channel" trigger
+  (docs/architecture/01-system-architecture.md §1.5, step 1) a natural
+  follow-up once there's a consumer for it (a dashboard, an API endpoint).
+
+Both modes share the same three building blocks:
+- `TrendAggregator` (trend_sources/) — trend signals feeding the prompt;
+  only the seed-topic source is real today, the rest are honest
+  `NotImplementedError` stubs (Phase 4).
+- `IdeaGenerator` (idea_generator.py) — the actual Claude call, forced
+  tool use, prompts loaded from prompts/research/ via libs/prompts.
+- `DuplicateChecker` (dedup.py) — a lexical similarity check against this
+  channel's existing ideas; flags a likely duplicate in `research_notes`
+  and caps the score rather than failing the job outright.
+
+See docs/architecture/03-agent-responsibilities.md §3.2 for the full
+picture, including the `Channel.persona_config` keys this code reads
+(`tone`/`persona`, `banned_topics`, `seed_topics`).
 """
 
 from typing import Any
+from uuid import UUID
+
+from sqlalchemy import select
 
 from libs.agents.base import BaseAgent
 from libs.core.celery_app import AgentTask, celery_app
+from libs.core.db import sync_session_scope
+from libs.core.logging import get_logger
+from libs.models.channel import Channel
+from libs.models.enums import CompetitionLevel, IdeaStatus, JobStatus
+from libs.models.idea import VideoIdea
+from libs.models.job import Job
+from libs.models.project import Project
 from libs.schemas.jobs import JobContext
+
+from .dedup import DuplicateChecker
+from .idea_generator import GeneratedIdea, IdeaGenerator
+from .trend_sources.aggregator import TrendAggregator
+
+logger = get_logger(__name__)
+
+#: Below this lexical similarity, an idea is not treated as a duplicate.
+_DUPLICATE_SIMILARITY_THRESHOLD = 0.6
+#: A likely-duplicate idea is still stored (a human can judge it), but its
+#: confidence score is capped so it doesn't rank above genuinely new ideas.
+_DUPLICATE_SCORE_CAP = 40
+
+
+def _channel_context(channel: Channel) -> tuple[str, str, list[str], list[str]]:
+    """Pull the persona fields this agent understands out of a channel's
+    freeform `persona_config` JSONB. Returns
+    (niche, persona_text, banned_topics, configured_seed_topics).
+    """
+    persona = channel.persona_config or {}
+    niche = channel.niche or "general"
+    persona_text = persona.get("tone") or persona.get("persona") or "general audience"
+    banned_topics = list(persona.get("banned_topics") or [])
+    seed_topics = list(persona.get("seed_topics") or [])
+    return niche, persona_text, banned_topics, seed_topics
 
 
 class ResearchAgent(BaseAgent):
     name = "research"
 
+    def __init__(self) -> None:
+        self._trends = TrendAggregator()
+        self._generator = IdeaGenerator()
+        self._dedup = DuplicateChecker(threshold=_DUPLICATE_SIMILARITY_THRESHOLD)
+
     def run(self, context: JobContext) -> dict[str, Any]:
-        raise NotImplementedError(
-            "Research agent logic lands in Phase 1 of the roadmap "
-            "(docs/architecture/06-roadmap.md) — see "
-            "docs/architecture/03-agent-responsibilities.md §3.2."
+        if context.project_id:
+            return self._enrich_project_idea(context)
+        return self._discover_channel_ideas(context)
+
+    # --- Enrich mode: one goal-driven idea, tied to an existing project --
+
+    def _enrich_project_idea(self, context: JobContext) -> dict[str, Any]:
+        with sync_session_scope() as session:
+            project = session.get(Project, UUID(context.project_id))
+            if project is None:
+                raise LookupError(f"project {context.project_id} not found")
+            idea = session.get(VideoIdea, project.idea_id)
+            if idea is None:
+                raise LookupError(f"idea {project.idea_id} not found")
+            channel = session.get(Channel, project.channel_id)
+            if channel is None:
+                raise LookupError(f"channel {project.channel_id} not found")
+
+            idea_id = str(idea.id)
+            channel_id = str(channel.id)
+            goal = context.payload.get("goal") or idea.title
+            channel_niche, channel_persona, banned_topics, seed_topics = _channel_context(channel)
+
+            existing = session.scalars(
+                select(VideoIdea).where(
+                    VideoIdea.channel_id == channel.id, VideoIdea.id != idea.id
+                )
+            ).all()
+            existing_titles = [e.title for e in existing]
+            existing_snapshot = [(str(e.id), e.title, list(e.keywords or [])) for e in existing]
+
+        trend_signals = self._trends.gather_signals(
+            channel_niche=channel_niche, seed_topics=seed_topics or [goal]
         )
+        generated = self._generator.generate(
+            channel_niche=channel_niche,
+            channel_persona=channel_persona,
+            banned_topics=banned_topics,
+            existing_titles=existing_titles,
+            trend_signals=trend_signals,
+            goal=goal,
+            count=1,
+        )
+        idea_data = generated[0]
+        research_notes, score, duplicate = self._apply_dedup(idea_data, existing_snapshot)
+
+        with sync_session_scope() as session:
+            idea = session.get(VideoIdea, UUID(idea_id))
+            self._write_idea_fields(idea, idea_data, research_notes, score)
+
+        logger.info(
+            "research_idea_enriched",
+            idea_id=idea_id,
+            channel_id=channel_id,
+            possible_duplicate=duplicate is not None,
+        )
+        return self._result(mode="enrich", idea_id=idea_id, idea_data=idea_data, research_notes=research_notes, score=score, duplicate=duplicate)
+
+    # --- Discover mode: several new candidate ideas for a channel --------
+
+    def _discover_channel_ideas(self, context: JobContext) -> dict[str, Any]:
+        payload = context.payload
+        channel_id = payload.get("channel_id")
+        if not channel_id:
+            raise ValueError(
+                "a research job with no project_id must carry a 'channel_id' in "
+                "its payload (dispatched via agents.research.discover)"
+            )
+        requested_seed_topics = list(payload.get("seed_topics") or [])
+        count = int(payload.get("count") or 5)
+
+        with sync_session_scope() as session:
+            channel = session.get(Channel, UUID(channel_id))
+            if channel is None:
+                raise LookupError(f"channel {channel_id} not found")
+            channel_niche, channel_persona, banned_topics, configured_seed_topics = _channel_context(channel)
+
+            existing = session.scalars(
+                select(VideoIdea).where(VideoIdea.channel_id == channel.id)
+            ).all()
+            existing_titles = [e.title for e in existing]
+            existing_snapshot = [(str(e.id), e.title, list(e.keywords or [])) for e in existing]
+
+        seed_topics = requested_seed_topics + [
+            t for t in configured_seed_topics if t not in requested_seed_topics
+        ]
+        trend_signals = self._trends.gather_signals(
+            channel_niche=channel_niche, seed_topics=seed_topics or None
+        )
+        generated = self._generator.generate(
+            channel_niche=channel_niche,
+            channel_persona=channel_persona,
+            banned_topics=banned_topics,
+            existing_titles=existing_titles,
+            trend_signals=trend_signals,
+            goal=None,
+            count=count,
+        )
+
+        created: list[dict[str, Any]] = []
+        with sync_session_scope() as session:
+            for idea_data in generated:
+                research_notes, score, duplicate = self._apply_dedup(idea_data, existing_snapshot)
+                idea = VideoIdea(channel_id=UUID(channel_id), source="research_agent", status=IdeaStatus.PROPOSED)
+                self._write_idea_fields(idea, idea_data, research_notes, score)
+                session.add(idea)
+                session.flush()
+                # so a later idea in this same batch can't "duplicate" an
+                # earlier one from the batch either
+                existing_snapshot.append((str(idea.id), idea_data.topic, idea_data.keywords))
+                created.append(
+                    self._result(
+                        mode="discover", idea_id=str(idea.id), idea_data=idea_data,
+                        research_notes=research_notes, score=score, duplicate=duplicate,
+                    )
+                )
+
+        logger.info("research_ideas_discovered", channel_id=channel_id, count=len(created))
+        return {"mode": "discover", "channel_id": channel_id, "ideas": created}
+
+    # --- Shared helpers ----------------------------------------------------
+
+    def _apply_dedup(
+        self, idea_data: GeneratedIdea, existing_snapshot: list[tuple[str, str, list[str]]]
+    ):
+        duplicate = self._dedup.find_best_match(idea_data.topic, idea_data.keywords, existing_snapshot)
+        research_notes = idea_data.research_notes
+        score = idea_data.score
+        if duplicate is not None:
+            research_notes = (
+                f'[Possible duplicate: {duplicate.similarity:.0%} similar to existing '
+                f'idea {duplicate.idea_id} "{duplicate.title}"] ' + research_notes
+            )
+            score = min(score, _DUPLICATE_SCORE_CAP)
+        return research_notes, score, duplicate
+
+    @staticmethod
+    def _write_idea_fields(idea: VideoIdea, idea_data: GeneratedIdea, research_notes: str, score: int) -> None:
+        idea.title = idea_data.topic
+        idea.keywords = idea_data.keywords
+        idea.rationale = idea_data.why_people_would_watch
+        idea.score = score
+        idea.target_audience = idea_data.target_audience
+        idea.suggested_angle = idea_data.suggested_angle
+        idea.competition_level = CompetitionLevel(idea_data.competition_level)
+        idea.suggested_length_sec = idea_data.suggested_length_sec
+        idea.research_notes = research_notes
+
+    @staticmethod
+    def _result(*, mode: str, idea_id: str, idea_data: GeneratedIdea, research_notes: str, score: int, duplicate) -> dict[str, Any]:
+        return {
+            "mode": mode,
+            "idea_id": idea_id,
+            "topic": idea_data.topic,
+            "target_audience": idea_data.target_audience,
+            "why_people_would_watch": idea_data.why_people_would_watch,
+            "keywords": idea_data.keywords,
+            "suggested_angle": idea_data.suggested_angle,
+            "competition_level": idea_data.competition_level,
+            "score": score,
+            "suggested_length_sec": idea_data.suggested_length_sec,
+            "research_notes": research_notes,
+            "possible_duplicate_of": duplicate.idea_id if duplicate else None,
+        }
 
 
 @celery_app.task(name="agents.research.run", bind=True, base=AgentTask, queue="research")
 def run_research_job(self: AgentTask, job_id: str) -> dict[str, Any]:
+    return ResearchAgent().execute_job(job_id)
+
+
+@celery_app.task(name="agents.research.discover", bind=True, base=AgentTask, queue="research")
+def discover_ideas_job(
+    self: AgentTask,
+    channel_id: str,
+    seed_topics: list[str] | None = None,
+    count: int = 5,
+) -> dict[str, Any]:
+    """Channel-level entry point — not part of the Manager's pipeline (see
+    module docstring). Creates its own `Job` row (`project_id=None`) the
+    same way `agents.analytics.sweep` does for its per-publication jobs,
+    then runs it through the normal `BaseAgent.execute_job` path so it
+    gets the same audit trail as every other agent invocation.
+    """
+    with sync_session_scope() as session:
+        job = Job(
+            project_id=None,
+            agent_name=ResearchAgent.name,
+            queue_name="research",
+            status=JobStatus.QUEUED,
+            payload={"channel_id": channel_id, "seed_topics": seed_topics, "count": count},
+        )
+        session.add(job)
+        session.flush()
+        job_id = str(job.id)
+
     return ResearchAgent().execute_job(job_id)
