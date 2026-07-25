@@ -6,7 +6,9 @@ breaking it into timed segments, an optional fact-check pass — is not
 implemented yet. `run()` raises `NotImplementedError` rather than
 returning a fabricated script; see
 docs/architecture/03-agent-responsibilities.md §3.3 and
-docs/architecture/06-roadmap.md, Phase 1.
+docs/architecture/06-roadmap.md, Phase 1. Its generation prompt already
+exists at prompts/script/generate_script/ (see libs/prompts) — load it
+via `get_prompt_loader().get("script", "generate_script")` once this lands.
 """
 
 from typing import Any

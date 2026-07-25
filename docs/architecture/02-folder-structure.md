@@ -19,6 +19,14 @@ yt-agent/
 ├── config/
 │   └── providers.yaml                # which concrete class backs each swappable capability (libs/providers)
 │
+├── prompts/                          # versioned prompt template files, loaded via libs/prompts —
+│   │                                 # never embedded as Python string constants — see prompts/README.md
+│   ├── manager/{workflow_decision_system/, workflow_decision_user/}
+│   ├── research/idea_scoring/
+│   ├── script/generate_script/
+│   ├── video/{storyboard_shot_planning/, thumbnail_prompt/}
+│   └── qa/policy_review/
+│
 ├── services/                         # one folder per deployable container
 │   ├── orchestrator/
 │   │   ├── Dockerfile
@@ -35,11 +43,11 @@ yt-agent/
 │   │   └── app/
 │   │       ├── worker.py             # Celery task entrypoint
 │   │       ├── trend_sources/        # youtube_trending.py, google_trends.py, reddit.py, rss.py
-│   │       ├── scoring.py            # LLM-based idea scoring + dedup via embeddings
-│   │       └── prompts/
+│   │       └── scoring.py            # LLM-based idea scoring + dedup via embeddings
+│   │                                 # (its prompt lives in prompts/research/, not here)
 │   │
 │   ├── agent_scriptwriter/
-│   │   └── app/{worker.py, prompts/, fact_check.py}
+│   │   └── app/{worker.py, fact_check.py}
 │   │
 │   ├── agent_video/                  # one agent, four internal modules — replaces what used to be
 │   │   │                             # four separate services/stages (storyboard, voiceover,
@@ -90,6 +98,11 @@ yt-agent/
 │   │   ├── local_backend.py          # the only backend that exists today
 │   │   └── registry.py               # get_storage_backend(), reads STORAGE_BACKEND/STORAGE_ROOT
 │   │
+│   ├── prompts/                      # Prompt Management System — loads prompts/ (above), never a
+│   │   │                             # Python string constant in agent code
+│   │   ├── loader.py                 # PromptLoader/PromptTemplate: versioning + variables + provider overrides
+│   │   └── registry.py               # get_prompt_loader(), reads PROMPTS_ROOT
+│   │
 │   ├── models/                       # SQLAlchemy ORM models, shared across all services
 │   └── schemas/                      # Pydantic DTOs shared between orchestrator and agents (job payloads/results)
 │
@@ -130,6 +143,14 @@ yt-agent/
   communicate only via queue messages and DB rows, these Pydantic models are the
   actual "API" between the Orchestrator and each agent — versioned and tested
   like one.
+- **Prompts are versioned files under `prompts/`, not Python string constants.**
+  Every agent that calls an LLM loads its prompt through
+  `libs.prompts.get_prompt_loader()` rather than embedding the wording in its
+  own module — this is what makes a prompt tunable, versionable
+  (`prompts/<agent>/<name>/v2.yaml`), and providable per-LLM
+  (`v1.claude.yaml`) without a code change. See
+  [Agent Responsibilities §3.1](./03-agent-responsibilities.md) for the one
+  place this is wired into real code today (the Manager's reasoning engine).
 - **Migrations live in one top-level `migrations/` folder**, not per-service,
   because there is one shared database. This avoids migration-ordering
   conflicts that come from splitting migrations across services.

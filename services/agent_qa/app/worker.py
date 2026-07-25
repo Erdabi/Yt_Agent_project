@@ -5,7 +5,9 @@ automated technical checks (sync, silence, duration, loudness) plus an
 LLM-based content-policy review — is not implemented yet. `run()` raises
 `NotImplementedError` rather than fabricating a pass/fail verdict; see
 docs/architecture/03-agent-responsibilities.md §3.8 and
-docs/architecture/06-roadmap.md, Phase 2.
+docs/architecture/06-roadmap.md, Phase 2. Its policy-review prompt
+already exists at prompts/qa/policy_review/ (see libs/prompts) — load it
+via `get_prompt_loader().get("qa", "policy_review")` once this lands.
 """
 
 from typing import Any

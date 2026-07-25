@@ -1,0 +1,20 @@
+template: |
+  Generate an image-generation prompt for a YouTube thumbnail for the video
+  titled "{{ video_title }}".
+
+  Channel style guide: {{ style_guide_summary }}
+  {% if emphasis_words %}Emphasize these words/concepts visually: {{ emphasis_words | join(", ") }}
+  {% endif %}
+  The result should be a single, concrete prompt suitable for an image
+  generation provider — describe composition, subject, mood, and color
+  palette explicitly.
+metadata:
+  description: >
+    Draft prompt for the Video Agent's thumbnail module
+    (docs/architecture/03-agent-responsibilities.md §3.4.4). Not wired
+    into real code yet — ThumbnailModule.generate() still raises
+    NotImplementedError (docs/architecture/06-roadmap.md, Phase 1). Ready
+    to load via get_prompt_loader().get("video", "thumbnail_prompt") once
+    it is.
+  owner: video-agent
+  variables: [video_title, style_guide_summary, emphasis_words]

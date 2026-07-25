@@ -6,7 +6,9 @@ checking for semantic duplication against past videos — is not
 implemented yet. `run()` raises `NotImplementedError` rather than
 returning fabricated ideas; see
 docs/architecture/03-agent-responsibilities.md §3.2 and
-docs/architecture/06-roadmap.md, Phase 1.
+docs/architecture/06-roadmap.md, Phase 1. Its idea-scoring prompt already
+exists at prompts/research/idea_scoring/ (see libs/prompts) — load it via
+`get_prompt_loader().get("research", "idea_scoring")` once this lands.
 """
 
 from typing import Any

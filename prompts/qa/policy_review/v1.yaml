@@ -1,0 +1,23 @@
+template: |
+  Review this YouTube video for content-policy risk before publishing.
+
+  Title: {{ video_title }}
+  Script:
+  ---
+  {{ script_content }}
+  ---
+  {% if monetization_guidelines_summary %}Relevant monetization guideline notes: {{ monetization_guidelines_summary }}
+  {% endif %}
+  Flag anything that risks demonetization or a community-guidelines strike
+  (medical claims, violence, misinformation, or other sensitive content).
+  For each issue, give a category, severity (low/medium/high), and a short
+  detail suitable for a qa_reports row.
+metadata:
+  description: >
+    Draft prompt for the QA Agent's LLM-based content-policy review
+    (docs/architecture/03-agent-responsibilities.md §3.8). Not wired into
+    real code yet — QAAgent.run() still raises NotImplementedError
+    (docs/architecture/06-roadmap.md, Phase 2). Ready to load via
+    get_prompt_loader().get("qa", "policy_review") once it is.
+  owner: qa-agent
+  variables: [video_title, script_content, monetization_guidelines_summary]

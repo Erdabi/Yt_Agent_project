@@ -21,6 +21,11 @@ for a single developer, not commitments.
 - Centralized asset storage abstraction (`libs/storage`), local-filesystem
   backend only, keyed by project id. **Done** for the same reason above —
   a real media-producing agent has something to write to from day one.
+- Prompt Management System (`libs/prompts`, `prompts/`): versioned
+  template files with variables and provider-specific overrides, replacing
+  Python string constants. **Done** — the Manager Agent's reasoning engine
+  already loads its prompts this way; Research/Script/Video/QA each have a
+  draft `v1` template waiting for the real LLM call that will load it.
 - Alembic baseline migration for the core schema
   ([Database Design §4.2](./04-database-design.md#core-tables)).
 - CI pipeline skeleton (lint, type-check, test, build images).
@@ -115,7 +120,7 @@ human tuning prompts by hand.
   dependency vulnerability scanning in CI.
 - Observability upgrade (Prometheus + Grafana + Flower) once operating
   unattended for long stretches makes richer dashboards worth the added
-  operational surface (see [Technology Choices §5.6](./05-technology-choices.md#56-why-not-more-sooner)).
+  operational surface (see [Technology Choices §5.7](./05-technology-choices.md#57-why-not-more-sooner)).
 
 This phase has no fixed exit criteria — it's the steady-state maintenance and
 scaling work that continues once the system is live.

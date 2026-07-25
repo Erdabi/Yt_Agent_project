@@ -1,0 +1,18 @@
+template: |
+  Plan the visual treatment for this script segment (segment #{{ segment_order_index }}):
+
+  "{{ script_segment_text }}"
+
+  Choose exactly one visual treatment from: {{ available_visual_types | join(", ") }}.
+  If choosing stock footage or an AI-generated image/video, also provide the
+  search query or generation prompt to use.
+metadata:
+  description: >
+    Draft prompt for the Video Agent's storyboard module
+    (docs/architecture/03-agent-responsibilities.md §3.4.1). Not wired
+    into real code yet — StoryboardModule.plan_shots() still raises
+    NotImplementedError (docs/architecture/06-roadmap.md, Phase 1). Ready
+    to load via get_prompt_loader().get("video", "storyboard_shot_planning")
+    once it is.
+  owner: video-agent
+  variables: [segment_order_index, script_segment_text, available_visual_types]

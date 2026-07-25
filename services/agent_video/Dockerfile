@@ -16,6 +16,12 @@ COPY services/agent_video/requirements.txt services/agent_video/requirements.txt
 RUN pip install --no-cache-dir -r services/agent_video/requirements.txt
 
 COPY libs/ libs/
+# config/providers.yaml (libs/providers/registry.py — image_gen/tts/video_gen
+# capabilities) and the versioned prompt template files
+# (libs/prompts/registry.py) this agent's modules will load once their
+# real logic lands (docs/architecture/06-roadmap.md, Phase 1).
+COPY config/ config/
+COPY prompts/ prompts/
 COPY services/agent_video/app app/
 
 ENV PYTHONPATH=/app \

@@ -7,7 +7,10 @@ needs the approved script/title — but runs after it here to keep
 `VideoAgent.run()` a single simple sequence rather than introducing
 concurrency inside one job for a modest latency win. Not implemented yet
 — see docs/architecture/03-agent-responsibilities.md §3.4.4 and
-docs/architecture/06-roadmap.md, Phase 1.
+docs/architecture/06-roadmap.md, Phase 1. Its image-gen prompt
+construction already exists at prompts/video/thumbnail_prompt/ (see
+libs/prompts) — load it via
+`get_prompt_loader().get("video", "thumbnail_prompt")` once this lands.
 """
 
 from typing import Any

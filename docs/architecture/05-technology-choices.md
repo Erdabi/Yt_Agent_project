@@ -50,7 +50,40 @@ exponential backoff on transient errors, and a circuit breaker that fails over
 to the next-priority provider after N consecutive failures — logged as a
 `system_events` row so a provider outage is visible, not silent.
 
-## 5.3 Logging, error handling, observability
+## 5.3 Prompt management (the versioned-template layer)
+
+Every prompt sent to an LLM is a file under `prompts/` at the repo root
+(`prompts/<agent>/<name>/v<N>[.<provider>].yaml`), loaded through
+`libs/prompts` (`get_prompt_loader()`) rather than embedded as a Python
+string constant — the same "config, not code" philosophy as §5.2's
+provider registry, applied to wording instead of vendor selection.
+
+- **Versioning**: `version="latest"` resolves to the highest `vN` present
+  on disk; pinning an older version (e.g. `MANAGER_PROMPT_VERSION=v1`) is
+  a config change, not a rollback commit.
+- **Variables**: templates are rendered with Jinja2
+  (`{{ variable }}`, `{% if %}`, `{% for %}`, filters) using
+  `StrictUndefined`, so a caller that forgets a variable gets an
+  immediate, readable error instead of an LLM silently receiving "None"
+  in its prompt.
+- **Provider-specific overrides**: `v1.claude.yaml` next to `v1.yaml`
+  gets picked when the caller requests `provider="claude"`; requesting a
+  provider with no override file is not an error, it just falls back to
+  the default wording. This is what "different prompts for Claude vs.
+  other LLMs" means in practice — one example exists today
+  (`prompts/manager/workflow_decision_system/`), tuned around Claude's
+  forced-tool-choice behavior.
+
+The Manager Agent's reasoning engine (§3.1) is the one real integration
+today, selecting its prompt templates at runtime rather than using a
+hardcoded string. Research/Script/Video/QA each have a draft `v1`
+template ready (`prompts/research/`, `prompts/script/`, `prompts/video/`,
+`prompts/qa/`) for when their real LLM calls land — see
+[Roadmap](./06-roadmap.md) — the same "interface before implementation"
+approach `libs/providers`' stub providers already use. See
+`prompts/README.md` for the full file-naming convention.
+
+## 5.4 Logging, error handling, observability
 
 | Concern | Choice | Why |
 |---|---|---|
@@ -60,7 +93,7 @@ to the next-priority provider after N consecutive failures — logged as a
 | Celery monitoring | Flower | Queue depth, task history, worker health — low-effort visibility into the queue layer specifically. |
 | Metrics/dashboards (phase 2) | Prometheus + Grafana | Added once there's more than one operator or the system runs unattended for long stretches; not needed for the MVP. |
 
-## 5.4 Configuration management
+## 5.5 Configuration management
 
 - **Pydantic Settings** (`pydantic-settings`) per service, all subclassing a
   shared base in `libs/core/config.py` — every setting is typed, validated at
@@ -81,7 +114,7 @@ to the next-priority provider after N consecutive failures — logged as a
   both the YAML and the table, points at the var name, never the key
   itself).
 
-## 5.5 Testing & CI/CD
+## 5.6 Testing & CI/CD
 
 | Concern | Choice | Why |
 |---|---|---|
@@ -92,7 +125,7 @@ to the next-priority provider after N consecutive failures — logged as a
 | CI | GitHub Actions | Lint (ruff), type-check (mypy), test, build each service's Docker image on PR; build+push to GHCR on merge to main. |
 | Deployment | SSH + `docker compose pull && docker compose up -d` (scripted in `scripts/deploy.sh`), or Watchtower for auto-pull | Matches the single-VPS, Compose-based deployment target — no need for a full CD platform at this scale. |
 
-## 5.6 Why not more, sooner
+## 5.7 Why not more, sooner
 
 Kubernetes, a message bus like Kafka, and a dedicated observability stack
 (Prometheus/Grafana/Loki) are all reasonable choices for a larger deployment,

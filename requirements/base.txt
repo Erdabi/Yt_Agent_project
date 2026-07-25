@@ -19,3 +19,7 @@ sentry-sdk==2.18.0
 
 # libs/providers' config-file-driven provider registry (config/providers.yaml)
 PyYAML==6.0.2
+
+# libs/prompts' Prompt Management System — renders versioned template
+# files (prompts/) with variables/conditionals/loops
+Jinja2==3.1.6

@@ -1,0 +1,18 @@
+template: |
+  Phase: {{ phase }}
+  Current stage: {{ stage }}
+  Job outcome: {{ job_status }}
+  Retries so far for this project: {{ retry_count }} of {{ max_retries }} allowed
+  {% if error %}Error: {{ error }}
+  {% endif %}
+  {% if next_stage %}Next stage in the plan if advancing: {{ next_stage }}
+  {% else %}This is the last stage in the plan; advancing marks the project complete.
+  {% endif %}
+  Decide the next action.
+metadata:
+  description: >
+    Per-decision context built from live job/project state, rendered fresh
+    on every call to ReasoningEngine.decide(). Variables: phase, stage,
+    job_status, retry_count, max_retries, error (optional, pass None to
+    omit), next_stage (optional, pass None for the last stage in the plan).
+  owner: manager-agent

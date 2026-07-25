@@ -13,6 +13,13 @@ COPY services/orchestrator/requirements.txt services/orchestrator/requirements.t
 RUN pip install --no-cache-dir -r services/orchestrator/requirements.txt
 
 COPY libs/ libs/
+# Root-level data directories every service's code may read at runtime —
+# not Python code, so not part of `libs/`, but still needed inside the
+# image: config/providers.yaml (libs/providers/registry.py) and the
+# versioned prompt template files (libs/prompts/registry.py) the Manager
+# Agent's reasoning engine loads.
+COPY config/ config/
+COPY prompts/ prompts/
 # Alembic migrations are bundled into this image too: the `migrate`
 # Compose service (docker-compose.yml) reuses this same image with
 # `command: alembic upgrade head` instead of building a separate one just

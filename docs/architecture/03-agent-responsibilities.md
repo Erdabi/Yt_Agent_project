@@ -6,6 +6,10 @@ one kind of work, writes its output to the database/centralized asset storage
 agent directly, and no agent decides the next pipeline stage — that's the
 Manager Agent's job (see
 [System Architecture §1.4](./01-system-architecture.md#14-orchestration-pattern-centralized-not-choreographed)).
+Any agent that calls an LLM loads its prompt from a versioned template file
+(`prompts/<agent>/<name>/`) through the Prompt Management System
+(`libs/prompts`) rather than embedding the wording in its own module — see
+`prompts/README.md`.
 
 ---
 
@@ -19,6 +23,12 @@ Manager Agent's job (see
 - Uses Claude as its reasoning engine to decide advance/retry/escalate/abort
   at every stage transition, with a deterministic fallback rule if the
   Claude call itself is unavailable (services/orchestrator/app/manager/reasoning.py).
+  Both prompts it sends — the system prompt and the per-decision context —
+  are loaded at runtime from `prompts/manager/` via `libs/prompts`, with a
+  Claude-specific override for the system prompt
+  (`workflow_decision_system/v1.claude.yaml`); a missing/broken template
+  file falls back to the same deterministic rule as a Claude API outage,
+  never a crash.
 - Applies retry policy: how many times a failed stage retries (bounded by
   `Project.retry_count` vs. a configured ceiling) before escalating to
   human review, and which upstream stage a `FAILED_QA` result routes back to.
@@ -44,6 +54,8 @@ Manager Agent's job (see
 - **Failure mode:** a trend source being unreachable is non-fatal — the agent
   degrades to fewer sources rather than failing the whole run; an LLM scoring
   failure fails the job and is retried with backoff.
+- **Prompt:** `prompts/research/idea_scoring/` (draft — not wired into real
+  code yet, see §6 Phase 1).
 
 ## 3.3 Script Writing Agent
 
@@ -58,6 +70,8 @@ Manager Agent's job (see
 - **Failure mode:** LLM output failing schema validation (missing sections,
   wildly wrong length) triggers an automatic single re-prompt before failing
   the job — cheap to retry, expensive to send bad input downstream.
+- **Prompt:** `prompts/script/generate_script/` (draft — not wired into real
+  code yet, see §6 Phase 1).
 
 ## 3.4 Video Agent
 
@@ -85,6 +99,8 @@ to assembly.
 - **Failure mode:** if a preferred visual type is unavailable (e.g. no stock
   match), it falls back to the next configured treatment (e.g. stock → AI
   image) rather than failing the segment.
+- **Prompt:** `prompts/video/storyboard_shot_planning/` (draft — not wired
+  into real code yet, see §6 Phase 1).
 
 ### 3.4.2 Voice-over module
 
@@ -129,6 +145,8 @@ to assembly.
 - **Output:** `thumbnails` rows linked to `assets`, one marked `is_selected`.
 - **Failure mode:** falls back to a template-only thumbnail (no AI image, text
   over a branded background) if the image-gen provider fails.
+- **Prompt:** `prompts/video/thumbnail_prompt/` (draft — not wired into real
+  code yet, see §6 Phase 1).
 
 ## 3.8 Quality Assurance Agent
 
@@ -145,6 +163,8 @@ to assembly.
   issues → `VIDEO_CREATION`, since voice-over/assembly are now internal
   modules of that one stage rather than separately addressable stages;
   policy flag → `SCRIPTING`), bounded by the project's `retry_count`.
+- **Prompt:** `prompts/qa/policy_review/` (draft — not wired into real code
+  yet, see §6 Phase 2).
 
 ## 3.9 Publisher Agent
 

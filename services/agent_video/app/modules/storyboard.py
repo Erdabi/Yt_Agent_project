@@ -4,7 +4,11 @@ Runs first inside `VideoAgent.run()`: decides, per script segment, the
 visual treatment (stock footage, AI image, AI video, or text overlay) and
 resolves it to a concrete asset. Not implemented yet — see
 docs/architecture/03-agent-responsibilities.md §3.4.1 and
-docs/architecture/06-roadmap.md, Phase 1.
+docs/architecture/06-roadmap.md, Phase 1. Its shot-planning prompt
+already exists at prompts/video/storyboard_shot_planning/ (see
+libs/prompts) — load it via
+`get_prompt_loader().get("video", "storyboard_shot_planning")` once this
+lands.
 """
 
 from typing import Any

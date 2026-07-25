@@ -10,6 +10,10 @@ COPY services/agent_publisher/requirements.txt services/agent_publisher/requirem
 RUN pip install --no-cache-dir -r services/agent_publisher/requirements.txt
 
 COPY libs/ libs/
+# config/providers.yaml (libs/providers/registry.py — the `youtube`
+# capability). No prompts/ here: publishing is YouTube Data API
+# mechanics, not an LLM call, so this agent has no prompt to load.
+COPY config/ config/
 COPY services/agent_publisher/app app/
 
 ENV PYTHONPATH=/app \

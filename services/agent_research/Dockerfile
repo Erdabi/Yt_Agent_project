@@ -10,6 +10,11 @@ COPY services/agent_research/requirements.txt services/agent_research/requiremen
 RUN pip install --no-cache-dir -r services/agent_research/requirements.txt
 
 COPY libs/ libs/
+# config/providers.yaml (libs/providers/registry.py) and the versioned
+# prompt template files (libs/prompts/registry.py) this agent will load
+# once its real logic lands (docs/architecture/06-roadmap.md, Phase 1).
+COPY config/ config/
+COPY prompts/ prompts/
 COPY services/agent_research/app app/
 
 ENV PYTHONPATH=/app \

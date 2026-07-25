@@ -109,6 +109,20 @@ class Settings(BaseSettings):
         default="config/providers.yaml", alias="PROVIDERS_CONFIG_PATH"
     )
 
+    # --- Prompt Management System (libs/prompts) ---------------------------
+    # Root directory of versioned prompt template files
+    # (prompts/<agent>/<name>/v<N>[.<provider>].yaml), loaded by
+    # libs/prompts/registry.py rather than embedding prompt text as Python
+    # string constants in agent code — see prompts/README.md.
+    prompts_root: str = Field(default="prompts", alias="PROMPTS_ROOT")
+
+    # --- Manager Agent: prompt template version ----------------------------
+    # Which version of the manager/workflow_decision_* templates the
+    # reasoning engine loads ("latest" resolves to the highest vN present
+    # on disk). Pin this to roll back a prompt wording change without a
+    # code change.
+    manager_prompt_version: str = Field(default="latest", alias="MANAGER_PROMPT_VERSION")
+
     @computed_field  # type: ignore[misc]
     @property
     def database_url(self) -> str:
