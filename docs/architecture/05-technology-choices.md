@@ -28,28 +28,39 @@ it per channel by name, plus track priority order and usage/cost logging.
 Swapping providers — or adding a fallback chain — is a config file (or
 database) change, never a code change in an agent.
 
-Only the `stub` implementation is registered for each capability today —
+Most capabilities are still only the `stub` implementation today —
 enough to prove the switching mechanism (YAML → dynamic import →
 instantiated class) is real and testable without fabricating an actual
 vendor integration. Adding a real provider is: write the class, register
-it in the YAML under that capability, flip `active:` to its name.
+it in the YAML under that capability, flip `active:` to its name (or set
+the `{CAPABILITY}_PROVIDER` environment variable, e.g.
+`VIDEO_GEN_PROVIDER=runway`, to override `active:` per-environment
+without editing the file at all — `libs/providers/registry.py`). Two
+capabilities already have a real implementation alongside their stub:
+`video_gen` (Runway, requiring a real API key to actually use) and
+`editor` (ffmpeg, requiring none) — see the table below.
 
 | Capability | Primary choice | Fallback | Notes |
 |---|---|---|---|
 | LLM (ideation, scripting, QA policy review) | Anthropic Claude API | OpenAI GPT | Used for scoring, script generation, fact-checking, and policy review — all through one `LLMProvider` interface so prompt logic is provider-agnostic. |
 | Text-to-speech | ElevenLabs | Azure Speech / OpenAI TTS | Selected per-voice in `provider_configs.config`; word-level timestamps (when supported) drive caption sync. |
 | Image generation (thumbnails, static visuals) | Stability AI | OpenAI (DALL-E) | |
-| Video generation (AI b-roll) | Runway ML | Pika | Phase 2+ — MVP relies primarily on stock footage to control cost and latency; see [Roadmap](./06-roadmap.md). |
+| Video generation (AI b-roll) | Runway ML | InVideo AI, Google Veo | Runway (`libs/providers/video_gen/runway_provider.py`) is a real, working adapter against Runway's public developer API (auth, request creation, polling, download, and Runway-specific error handling — all internal to that one file); `video_gen.active` stays `stub` until a real `RUNWAY_API_KEY` is configured, so nothing calls a paid vendor by default. InVideo AI and Google Veo (`invideo_provider.py`/`veo_provider.py`) are honest stubs rather than fabricated integrations: InVideo publishes no verifiable public REST API contract as of this writing, and Veo needs Vertex AI OAuth service-account credentials this codebase has no way to test against — both raise a clear error explaining exactly what's missing, the same as every other unimplemented vendor in this table. MVP still relies primarily on stock footage to control cost and latency; see [Roadmap](./06-roadmap.md). |
 | Stock footage/images (`stock_media`) | Pexels API | Pixabay API | Used by the Video Agent's Asset Generation module as the default visual source before AI generation — see [Agent Responsibilities §3.4](./03-agent-responsibilities.md#34-video-agent). |
 | Sound effects / background music (`audio_library`) | Freesound API | Epidemic Sound | Also used by Asset Generation, for the two audio-only asset requirement types (`sound_effect`, `background_music_cue`) a script segment can declare. |
 | Video rendering/composition | FFmpeg, invoked directly via `subprocess` (no `ffmpeg-python`/MoviePy wrapper) | Remotion | Chosen over Remotion to avoid adding a Node.js runtime dependency alongside the Python stack; Remotion remains a documented alternative if programmatic, React-authored templates are wanted later. Direct `subprocess` calls (`libs/providers/editor/ffmpeg_provider.py`) were chosen over a fluent Python wrapper for precise control over the filter graph and one less library surface to debug. Unlike every other capability in this table, this one needs no vendor account — ffmpeg is a free local binary (installed in the Video Agent's Dockerfile) — so it's a real, working implementation, not a stub. |
 | Captions | TTS provider's word timestamps, else an even split of the segment's known duration across its words | — | The Video Agent's Subtitle Generation module never requires provider-level timestamps — a provider that doesn't return them just gets a less precise (but still correct) even-split fallback instead of failing. ASR-based alignment (e.g. Whisper) instead of the even-split fallback is a possible future improvement, not built yet. |
 | Publishing & analytics | YouTube Data API v3 + YouTube Analytics API | — | Not swappable (there's only one YouTube), but isolated behind `libs/providers/youtube/` so quota handling and OAuth logic live in one place. |
 
-Provider calls share one retry/backoff wrapper (`libs/providers` base class):
-exponential backoff on transient errors, and a circuit breaker that fails over
-to the next-priority provider after N consecutive failures — logged as a
-`system_events` row so a provider outage is visible, not silent.
+Retry/backoff on transient errors is currently each adapter's own
+responsibility rather than a shared `libs/providers` wrapper — e.g.
+`RunwayProvider` retries a dropped connection or a 5xx response with
+exponential backoff, but fails immediately (no retry) on a 4xx or a
+provider-reported terminal failure, since those won't be fixed by
+retrying the identical request. A shared retry/circuit-breaker layer
+that fails over to the next-priority `provider_configs` entry after N
+consecutive failures, logged as a `system_events` row, remains a
+documented future enhancement, not built yet.
 
 ## 5.3 Prompt management (the versioned-template layer)
 

@@ -105,7 +105,7 @@ yt-agent/
 │   ├── providers/                    # the swappable AI-provider abstraction layer, config-file-driven
 │   │   ├── base.py                   # Provider marker + ProviderConfigError
 │   │   ├── registry.py               # get_provider(capability) -> instance, reads config/providers.yaml
-│   │   ├── video_gen/{base.py, stub_provider.py}
+│   │   ├── video_gen/{base.py, stub_provider.py, runway_provider.py, invideo_provider.py, veo_provider.py}  # runway_provider.py is real; the other two are honest stubs (no verifiable public API)
 │   │   ├── tts/{base.py, stub_provider.py}        # base.py's SynthesisResult carries optional per-word timing
 │   │   ├── image_gen/{base.py, stub_provider.py}
 │   │   ├── stock_media/{base.py, stub_provider.py}    # StockMediaProvider.search() — stock footage/photos

@@ -17,6 +17,17 @@ whatever this file defines, plus usage/cost logging. A caller honoring a
 channel's DB override passes that row's `provider_name` as
 `preferred_name` below; omitting it uses this file's "active" default.
 
+Provider selection precedence, highest first: `preferred_name` (a
+per-call override, e.g. a channel's `provider_configs` row) > an
+`{CAPABILITY}_PROVIDER` environment variable (e.g. `VIDEO_GEN_PROVIDER`
+for `video_gen`) > this file's `active:` line for the capability. The
+env var is an operational convenience for switching a provider (or
+overriding it per-environment/deployment) without editing the YAML file
+at all — reading it directly here, rather than through a typed
+`Settings` field, mirrors this same function's existing `secret_ref`
+handling below, and needs no capability-specific code since it's derived
+from the capability name alone.
+
 Usage:
 
     from libs.providers.registry import get_provider
@@ -86,11 +97,14 @@ def _instantiate(capability: str, provider_name: str, entry: dict[str, Any]) -> 
 
 def get_provider(capability: str, *, preferred_name: str | None = None) -> Provider:
     """Return the configured provider instance for `capability`
-    (`"video_gen"`, `"tts"`, `"image_gen"`, or `"youtube"`).
+    (`"video_gen"`, `"tts"`, `"image_gen"`, `"stock_media"`,
+    `"audio_library"`, `"editor"`, or `"youtube"`).
 
-    `preferred_name`, if given, overrides the config file's `active`
-    default for this one call — the hook for honoring a channel-specific
-    `provider_configs` row instead of the process-wide default.
+    `preferred_name`, if given, overrides both the environment variable
+    and the config file's `active` default for this one call — the hook
+    for honoring a channel-specific `provider_configs` row instead of the
+    process-wide default. See the module docstring for the full
+    precedence order.
     """
     settings = get_settings()
     config = _load_config(settings.providers_config_path)
@@ -100,14 +114,16 @@ def get_provider(capability: str, *, preferred_name: str | None = None) -> Provi
         raise ProviderConfigError(f"unknown capability: {capability!r}")
 
     providers = capability_config.get("providers") or {}
-    provider_name = preferred_name or capability_config.get("active")
+    env_override = os.environ.get(f"{capability.upper()}_PROVIDER")
+    provider_name = preferred_name or env_override or capability_config.get("active")
     if not provider_name:
         raise ProviderConfigError(f"capability {capability!r} has no 'active' provider set")
 
     entry = providers.get(provider_name)
     if entry is None:
         raise ProviderConfigError(
-            f"provider {provider_name!r} is not defined for capability {capability!r}"
+            f"provider {provider_name!r} is not defined for capability {capability!r} "
+            f"(available: {sorted(providers)})"
         )
 
     return _instantiate(capability, provider_name, entry)

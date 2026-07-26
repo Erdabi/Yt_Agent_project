@@ -25,21 +25,60 @@
 # one, not a stub. `editor` also isn't in libs.models.enums.ProviderCapability
 # (no per-channel DB-driven override) — same as `youtube` below, which
 # isn't either.
+#
+# `video_gen` also now has one real, working adapter alongside its
+# stub: `runway` (libs/providers/video_gen/runway_provider.py), against
+# Runway's public developer API — a genuine paid vendor account is still
+# required (RUNWAY_API_KEY), so `active` stays `stub` here until one is
+# configured. `invideo` and `veo` remain honest stubs: neither has a
+# public API contract this codebase could verify (invideo) or that this
+# codebase has real GCP credentials to implement against (veo) — see
+# each module's own docstring.
+#
+# Every capability's active provider can also be overridden per-process
+# without editing this file at all, via an environment variable named
+# `{CAPABILITY}_PROVIDER` — e.g. `VIDEO_GEN_PROVIDER=runway` — read by
+# libs/providers/registry.py ahead of the `active:` line below.
 
 video_gen:
+  # Stays the default here so the repo boots without any video_gen API
+  # key configured — flip this to "runway" (a real, working adapter) once
+  # RUNWAY_API_KEY is set, or override per-environment with the
+  # VIDEO_GEN_PROVIDER env var (libs/providers/registry.py) without
+  # touching this file at all.
   active: stub
   providers:
     stub:
       class: libs.providers.video_gen.stub_provider.StubVideoGenProvider
       config: {}
-  # Real provider example (Runway, docs/architecture/05-technology-choices.md
-  # §5.2 — Phase 2+): add libs/providers/video_gen/runway_provider.py
-  # subclassing VideoGenProvider, then:
-  #   runway:
-  #     class: libs.providers.video_gen.runway_provider.RunwayProvider
-  #     config: {model: gen-3}
-  #     secret_ref: RUNWAY_API_KEY
-  # and set active: runway.
+    # Real, working adapter (libs/providers/video_gen/runway_provider.py)
+    # against Runway's public developer API (docs.dev.runwayml.com).
+    runway:
+      class: libs.providers.video_gen.runway_provider.RunwayProvider
+      config:
+        model: gen4_turbo
+        ratio: "1280:720"
+        duration: 5
+        poll_interval_sec: 5
+        poll_timeout_sec: 300
+      secret_ref: RUNWAY_API_KEY
+    # Honest stub (libs/providers/video_gen/invideo_provider.py) — no
+    # verifiable public API contract exists to implement against yet;
+    # see that module's docstring.
+    invideo:
+      class: libs.providers.video_gen.invideo_provider.InVideoProvider
+      config: {}
+      secret_ref: INVIDEO_API_KEY
+    # Honest stub (libs/providers/video_gen/veo_provider.py) — needs
+    # Vertex AI OAuth service-account credentials, not a static API key;
+    # see that module's docstring.
+    veo:
+      class: libs.providers.video_gen.veo_provider.VeoProvider
+      config:
+        project_id: ""
+        location: us-central1
+        model: veo-3.0-generate-001
+      secret_ref: GOOGLE_VEO_API_KEY
 
 tts:
   active: stub

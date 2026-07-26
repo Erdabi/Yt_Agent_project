@@ -307,9 +307,19 @@ render plan) is real and tested end to end, including a real compositor
 (`libs/providers/editor/ffmpeg_provider.py`) and real thumbnail
 compositing — the whole pipeline has been verified to produce an actual
 playable MP4 and thumbnail image end to end (§3.4.6, §3.4's Thumbnail
-Generation section). What remains stub is `image_gen`/`video_gen`/
+Generation section). `video_gen` also has a real, verified adapter —
+Runway ML (`libs/providers/video_gen/runway_provider.py`) — alongside
+its stub, proven end to end with a mocked HTTP layer standing in for
+Runway's servers: authentication, request creation, polling, downloading
+the finished clip, and Runway-specific error handling/retries all live
+inside that one file, with `video_gen.active` staying `stub` until a
+real `RUNWAY_API_KEY` is configured. What remains stub is `image_gen`/
 `tts`/`stock_media`/`audio_library`'s real *vendor* integrations
-(currently all `stub` in `config/providers.yaml`) — swapping one in
+(currently all `stub` in `config/providers.yaml`), plus `video_gen`'s
+InVideo AI and Google Veo alternatives — both honest stubs rather than
+fabricated integrations, since neither has a verifiable public API
+contract this codebase could implement against (see
+`invideo_provider.py`/`veo_provider.py`). Swapping any of these in
 exercises the same module code already verified against fake providers;
 nothing about the pipeline itself needs to change.
 

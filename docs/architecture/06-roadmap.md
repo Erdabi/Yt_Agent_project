@@ -73,17 +73,29 @@ for a single developer, not commitments.
   Postgres, producing an actual playable MP4 and thumbnail image, and
   confirming the Asset Cache (below) makes a second, identical request
   reuse prior output with zero new provider calls. What's still a real
-  *vendor* integration away: `image_gen`/`video_gen`/`stock_media`/
-  `audio_library`/`tts` are all still the `stub` implementation
-  (config/providers.yaml) — no AI-generated visuals or real narration
-  yet, MVP relies on whichever of those get wired to a real vendor first.
-  `editor` (video compositing) is the one exception: it needs no vendor
-  account at all, so its real ffmpeg-based provider
-  (`libs/providers/editor/ffmpeg_provider.py`) already composites
-  images/video clips + narration + supplementary audio + burned-in
-  captions into a final MP4 — Ken Burns-style motion and distinct
-  wipe/slide/zoom/dissolve transitions (today collapsed to a plain fade)
-  remain a documented future enhancement, not a blocker.
+  *vendor* integration away: `image_gen`/`stock_media`/`audio_library`/
+  `tts` are all still the `stub` implementation (config/providers.yaml,
+  `active: stub`) — no AI-generated visuals or real narration yet, MVP
+  relies on whichever of those get wired to a real vendor first.
+  `video_gen` now has one real, verified adapter (Runway ML —
+  `libs/providers/video_gen/runway_provider.py`, authentication/request
+  creation/polling/download/error-handling all real, proven end to end
+  with a mocked HTTP layer standing in for Runway's actual servers) plus
+  two honest stubs (InVideo AI, Google Veo) rather than fabricated
+  integrations for either — neither has a verifiable public API contract
+  this codebase could implement against safely (see
+  `invideo_provider.py`/`veo_provider.py`'s own docstrings).
+  `video_gen.active` stays `stub` by default until a real
+  `RUNWAY_API_KEY` is configured, so nothing calls a paid vendor
+  out of the box; switching it (or any capability) to a different
+  registered provider is a `config/providers.yaml` edit or a
+  `{CAPABILITY}_PROVIDER` environment variable, never a code change.
+  `editor` (video compositing) needs no vendor account at all, so its
+  real ffmpeg-based provider (`libs/providers/editor/ffmpeg_provider.py`)
+  already composites images/video clips + narration + supplementary
+  audio + burned-in captions into a final MP4 — Ken Burns-style motion
+  and distinct wipe/slide/zoom/dissolve transitions (today collapsed to
+  a plain fade) remain a documented future enhancement, not a blocker.
 - Publisher Agent: manual trigger, no auto-scheduling.
 - A human approval checkpoint at **every** stage transition (safest possible
   starting posture).
@@ -131,7 +143,12 @@ in the dashboard within a day of publishing.
   performed), not just LLM judgment in a vacuum.
 - Live trend scraping (YouTube trending, Google Trends, Reddit, RSS) replacing
   the Phase 1 seed-list approach.
-- AI image/video-gen provider integration for visuals beyond stock footage.
+- AI image-gen provider integration for visuals beyond stock footage.
+  Video-gen has a real adapter already (Runway ML, Phase 1) — what
+  remains here is actually configuring a funded `RUNWAY_API_KEY` (or
+  wiring InVideo/Veo once either publishes a real API to implement
+  against) and relying on it beyond stock footage as the primary visual
+  source.
 - Automated thumbnail/title A/B variant testing.
 - Per-provider cost tracking dashboard (`provider_usage_log` surfaced as
   spend-by-provider, spend-by-video).

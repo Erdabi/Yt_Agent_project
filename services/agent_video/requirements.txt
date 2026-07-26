@@ -9,7 +9,14 @@
 # locally rather than through any provider.
 Pillow==12.3.0
 
+# libs/providers/video_gen/runway_provider.py's real Runway ML adapter —
+# the first provider in this codebase to make outbound HTTP calls to a
+# vendor REST API (every prior provider was either a stub or, like
+# ffmpeg, shells out to a local binary instead).
+requests==2.32.3
+
 # Still stub implementations, waiting on real vendor integrations
 # (docs/architecture/06-roadmap.md): asset_generation.py (stock-media/
-# image-gen/video-gen/audio-library client libraries), voice_generation.py
-# (TTS provider SDK).
+# image-gen/audio-library client libraries), voice_generation.py (TTS
+# provider SDK). video_gen itself now has one real adapter (Runway) plus
+# two honest stubs (InVideo, Veo) — see libs/providers/video_gen/.
