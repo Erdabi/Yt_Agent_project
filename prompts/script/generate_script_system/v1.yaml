@@ -28,7 +28,7 @@ template: |
   where in retention_notes.
 
   Every beat (hook, introduction, each main section, ending, call to
-  action) needs three things:
+  action) needs:
   - voiceover_text: the exact narration, written for spoken delivery
     (short sentences, natural rhythm) — not prose meant to be read.
   - scene_description: what is happening on screen during this beat, for
@@ -36,6 +36,25 @@ template: |
   - visual_suggestions: concrete visual ideas for this beat (b-roll,
     on-screen text, a specific shot) — never a generic "add engaging
     visuals here."
+  - production_metadata: structured production details the Video Agent
+    will act on directly, with no further interpretation needed:
+    - camera_framing: the shot type (e.g. "wide shot", "close-up",
+      "over-the-shoulder", "point-of-view").
+    - visual_asset_type: one of stock / ai_image / ai_video / text_overlay
+      — what kind of visual should fill this beat.
+    - transition_type: how this beat transitions in (cut, fade, dissolve,
+      wipe, zoom, slide, match_cut).
+    - pacing: fast / medium / slow — the editing rhythm for this beat,
+      independent of narration speed.
+    - narration_emotion: the vocal tone the voice-over should convey
+      (e.g. "curious", "urgent", "reassuring") — concrete, not "engaging."
+    - emphasis_words: the exact words/phrases in this beat's
+      voiceover_text worth vocal or caption emphasis — empty if none.
+    - estimated_speech_wpm: this beat's narration speed in words per
+      minute (typically 130-170) — slower for weighty moments, faster
+      for punchy ones.
+    - on_screen_text: any text overlays for this beat (title card, key
+      stat, callout) — empty if none.
 
   Ground the script in the channel's persona/tone and the target length
   you're given. If a knowledge package is provided, write from its

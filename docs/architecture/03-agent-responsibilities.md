@@ -165,36 +165,76 @@ research; the Research Agent (§3.2) already did that.
     carries `voiceover_text` (exact narration, written for spoken
     delivery), a `scene_description` (what's on screen), and
     `visual_suggestions` (concrete b-roll/on-screen-text/shot ideas — never
-    generic "add engaging visuals").
+    generic "add engaging visuals"), plus structured **production
+    metadata** the Video Agent can act on with no further parsing:
+    `camera_framing` (free text — "wide shot", "close-up", ...),
+    `visual_asset_type` (reuses `libs.models.enums.ShotType` — the same
+    vocabulary `StoryboardShot.shot_type` already uses, so there's nothing
+    to translate later), `transition_type` (cut/fade/dissolve/wipe/
+    zoom/slide/match_cut), `pacing` (fast/medium/slow — editing rhythm,
+    independent of narration speed), `narration_emotion` (free text —
+    "curious", "urgent", ...), `emphasis_words`, `estimated_speech_wpm`
+    (bounded 80-220 in the tool schema, and clamped again defensively
+    before the worker computes `estimated_duration_sec` from it — never
+    trust an LLM-supplied number for a downstream calculation without a
+    floor/ceiling, same posture as the Manager enforcing its own retry
+    ceiling), and `on_screen_text` (optional overlay text). See
+    `script_schema.py`'s `SegmentProductionMetadata`.
 
   When the idea has a Knowledge Package, the agent writes from its
   verified facts, timeline, entities, and hooks directly instead of
   inventing claims of its own — the same "don't fabricate" discipline the
   Research Agent's `knowledge_builder.py` follows. Like `idea_generator.py`,
-  there is no deterministic fallback: a missing API key, a failed call, a
-  refusal, an empty `main_sections` list, or a malformed response all raise
-  `ScriptGenerationError` and fail the job honestly — a fabricated
-  placeholder script would defeat the entire point of this agent.
+  there is no deterministic fallback for this draft call: a missing API
+  key, a failed call, a refusal, an empty `main_sections` list, or a
+  malformed response all raise `ScriptGenerationError` and fail the job
+  honestly — a fabricated placeholder script would defeat the entire
+  point of this agent.
+- **Self-reviews before persisting:** every draft passes through a second,
+  lightweight Claude call (`script_reviewer.py`) before anything is
+  written to the database. Given the full draft and the Knowledge
+  Package, it checks factual consistency (any claim the package doesn't
+  support gets softened or removed), viewer retention (the hook actually
+  earns attention, open loops get resolved, the retention techniques
+  `retention_notes` claims are actually present in the segments), and
+  repetition (an idea/phrase/visual restated across segments gets said
+  once, well, instead of twice) — then returns the same full script
+  structure back, corrected where needed and left alone where it already
+  worked, plus `review_notes` explaining what it checked and changed.
+  Unlike generation, review failure does **not** fail the job: the draft
+  it's reviewing is already valid and complete, so any failure (no key,
+  API error, refusal, malformed response) logs a warning and falls back
+  to the original, unreviewed draft — with `review_notes` recording that
+  the pass was skipped and why, so that's never silently indistinguishable
+  from "reviewed, nothing to fix." A review step that could block an
+  already-good script from being persisted would defeat its own "keep it
+  lightweight" premise.
 - **Output:** a versioned `scripts` row (`content` — the full narration,
   concatenated in order; `structure_notes`; `retention_notes`;
-  `target_duration_sec`; `word_count`; `status=draft`) plus one ordered
-  `script_segments` row per beat (`segment_type` — hook / introduction /
-  main_section / ending / call_to_action; `text` — the voiceover;
-  `scene_notes` — the scene description, prefixed with the section's
-  internal heading for main sections; `visual_notes` — the visual
-  suggestions; `estimated_duration_sec` — a rough word-count-based
-  estimate for the Storyboard module to plan shot lengths with, before
-  real voiceover audio exists). Scripts are versioned, never mutated in
-  place — a regeneration for the same project gets `version = max(existing) +
-  1`, so a QA-triggered rewrite never overwrites what it's replacing.
-- **Failure mode:** any Claude-call failure raises `ScriptGenerationError`
-  and fails the job, which the Manager's reasoning engine then retries or
-  escalates like any other agent failure — no automatic re-prompt inside
-  this agent itself.
+  `review_notes`; `target_duration_sec`; `word_count`; `status=draft`)
+  plus one ordered `script_segments` row per beat (`segment_type` — hook /
+  introduction / main_section / ending / call_to_action; `text` — the
+  voiceover; `scene_notes` — the scene description, prefixed with the
+  section's internal heading for main sections; `visual_notes` — the
+  visual suggestions; `production_metadata` — the structured JSONB bundle
+  above; `estimated_duration_sec` — computed from word count and that
+  beat's own `estimated_speech_wpm`, for the Storyboard module to plan
+  shot lengths with before real voiceover audio exists). Scripts are
+  versioned, never mutated in place — a regeneration for the same project
+  gets `version = max(existing) + 1`, so a QA-triggered rewrite never
+  overwrites what it's replacing.
+- **Failure mode:** any generation-call failure raises
+  `ScriptGenerationError` and fails the job, which the Manager's reasoning
+  engine then retries or escalates like any other agent failure — no
+  automatic re-prompt inside this agent itself. A review-call failure, as
+  above, degrades to the unreviewed draft rather than failing the job.
 - **Prompts:** `prompts/script/generate_script_system/` +
-  `generate_script_user/`, each with a Claude-specific system-prompt
-  override (`v1.claude.yaml`) noting the forced `tool_choice`, same pattern
-  as `prompts/research/generate_ideas_system/`.
+  `generate_script_user/` (drafting), and
+  `prompts/script/review_script_system/` + `review_script_user/`
+  (self-review) — each system prompt has a Claude-specific override
+  (`v1.claude.yaml`) noting the forced `tool_choice`, same pattern as
+  `prompts/research/generate_ideas_system/`. Both prompt pairs are
+  versioned together under one `SCRIPT_PROMPT_VERSION` setting.
 
 ## 3.4 Video Agent
 

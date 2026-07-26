@@ -6,8 +6,16 @@ complete, production-ready script: a strong opening hook, an
 introduction, a deliberately chosen story structure, the main body
 sections, retention techniques woven throughout, an ending, and a call
 to action. Every beat carries voice-over text, a scene description, and
-concrete visual suggestions, for the Video Agent's storyboard/voiceover
-modules (services/agent_video) to work from directly once implemented.
+structured production metadata (camera framing, visual asset type,
+transition, pacing, narration emotion, emphasis words, speech speed,
+on-screen text — see script_schema.py) for the Video Agent's
+storyboard/voiceover modules (services/agent_video) to consume directly,
+without parsing free text.
+
+This module only drafts. `ScriptwriterAgent.run()` (worker.py) always
+runs `script_reviewer.py`'s self-review pass on this draft afterward
+before persisting — see that module for why review is a separate,
+best-effort step rather than folded into this call.
 
 Both prompts sent to Claude are loaded at runtime from the Prompt
 Management System (libs/prompts) — see
@@ -20,8 +28,6 @@ failed call, a refusal, or a malformed response all raise
 inventing a fake script would defeat the entire purpose of this agent.
 """
 
-from dataclasses import dataclass
-
 import anthropic
 
 from libs.context import ProjectContext
@@ -29,7 +35,14 @@ from libs.core.config import get_settings
 from libs.core.logging import get_logger
 from libs.llm_usage import track_llm_call
 from libs.prompts import PromptNotFoundError, PromptRenderError, get_prompt_loader
-from libs.schemas.knowledge import KnowledgePackage
+
+from .script_schema import (
+    SCRIPT_CONTENT_PROPERTIES,
+    SCRIPT_CONTENT_REQUIRED,
+    GeneratedScript,
+    render_knowledge_package_context,
+    script_from_dict,
+)
 
 logger = get_logger(__name__)
 
@@ -46,180 +59,17 @@ class ScriptGenerationError(RuntimeError):
     """
 
 
-@dataclass(frozen=True)
-class ScriptBeat:
-    voiceover_text: str
-    scene_description: str
-    visual_suggestions: str
-
-
-@dataclass(frozen=True)
-class ScriptSection(ScriptBeat):
-    #: A short internal label (e.g. "Why this happens") — never shown to
-    #: viewers, just for readability in the DB/audit trail.
-    heading: str
-
-
-@dataclass(frozen=True)
-class GeneratedScript:
-    structure_notes: str
-    retention_notes: str
-    hook: ScriptBeat
-    introduction: ScriptBeat
-    main_sections: list[ScriptSection]
-    ending: ScriptBeat
-    call_to_action: ScriptBeat
-
-
-_BEAT_PROPERTIES = {
-    "voiceover_text": {
-        "type": "string",
-        "description": (
-            "Exact narration for this beat, written for spoken delivery — "
-            "short sentences, natural rhythm, not prose meant to be read."
-        ),
-    },
-    "scene_description": {
-        "type": "string",
-        "description": "What is happening on screen during this beat, for whoever storyboards it next.",
-    },
-    "visual_suggestions": {
-        "type": "string",
-        "description": (
-            "Concrete visual ideas for this beat (b-roll, on-screen text, a "
-            'specific shot) — never a generic "add engaging visuals."'
-        ),
-    },
-}
-_BEAT_REQUIRED = ["voiceover_text", "scene_description", "visual_suggestions"]
-
-_BEAT_SCHEMA = {
-    "type": "object",
-    "properties": _BEAT_PROPERTIES,
-    "required": _BEAT_REQUIRED,
-    "additionalProperties": False,
-}
-
-_SECTION_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "heading": {
-            "type": "string",
-            "description": "A short internal label for this section (not shown to viewers).",
-        },
-        **_BEAT_PROPERTIES,
-    },
-    "required": ["heading", *_BEAT_REQUIRED],
-    "additionalProperties": False,
-}
-
 _PROPOSE_SCRIPT_TOOL = {
     "name": "propose_script",
     "description": "Propose a complete, structured YouTube video script ready for production.",
     "strict": True,
     "input_schema": {
         "type": "object",
-        "properties": {
-            "structure_notes": {
-                "type": "string",
-                "description": (
-                    "The narrative structure/story arc chosen for this script "
-                    '(e.g. "problem -> agitation -> solution", "chronological '
-                    'case study", "listicle with a throughline") and why it '
-                    "fits this topic."
-                ),
-            },
-            "retention_notes": {
-                "type": "string",
-                "description": (
-                    "The specific retention techniques used and where in the "
-                    "script (open loops, pattern interrupts, callbacks, "
-                    "curiosity gaps) — concrete, tied to moments in the "
-                    "script, not generic advice."
-                ),
-            },
-            "hook": _BEAT_SCHEMA,
-            "introduction": _BEAT_SCHEMA,
-            "main_sections": {
-                "type": "array",
-                "items": _SECTION_SCHEMA,
-                "minItems": 1,
-            },
-            "ending": _BEAT_SCHEMA,
-            "call_to_action": _BEAT_SCHEMA,
-        },
-        "required": [
-            "structure_notes",
-            "retention_notes",
-            "hook",
-            "introduction",
-            "main_sections",
-            "ending",
-            "call_to_action",
-        ],
+        "properties": SCRIPT_CONTENT_PROPERTIES,
+        "required": SCRIPT_CONTENT_REQUIRED,
         "additionalProperties": False,
     },
 }
-
-
-def _render_knowledge_package_context(package: KnowledgePackage) -> str:
-    """A compact plain-text digest of a `KnowledgePackage` for the prompt
-    — not the full Markdown rendering
-    (services/agent_research/app/knowledge_package_render.py), which is
-    Research-Agent-specific output for humans; this agent only needs the
-    content-generation inputs (facts, timeline, entities, hooks), not
-    citations or schema metadata.
-    """
-    lines: list[str] = [f"Summary: {package.summary}"]
-
-    if package.verified_facts:
-        lines.append("Verified facts:")
-        lines.extend(
-            f"- {fact.statement} ({fact.confidence} confidence)" for fact in package.verified_facts
-        )
-    if package.timeline:
-        lines.append("Timeline:")
-        lines.extend(f"- {entry.date}: {entry.event}" for entry in package.timeline)
-    if package.entities:
-        lines.append("Key entities:")
-        lines.extend(f"- {e.name} ({e.type}): {e.description}" for e in package.entities)
-    if package.hooks:
-        lines.append("Suggested hooks from research:")
-        lines.extend(f"- {hook}" for hook in package.hooks)
-    if package.related_topics:
-        lines.append(f"Related topics: {', '.join(package.related_topics)}")
-    if package.supporting_notes:
-        lines.append(f"Caveats/notes: {package.supporting_notes}")
-
-    return "\n".join(lines)
-
-
-def _beat_from(data: dict) -> ScriptBeat:
-    return ScriptBeat(
-        voiceover_text=data["voiceover_text"],
-        scene_description=data["scene_description"],
-        visual_suggestions=data["visual_suggestions"],
-    )
-
-
-def _to_generated_script(raw: dict) -> GeneratedScript:
-    return GeneratedScript(
-        structure_notes=raw["structure_notes"],
-        retention_notes=raw["retention_notes"],
-        hook=_beat_from(raw["hook"]),
-        introduction=_beat_from(raw["introduction"]),
-        main_sections=[
-            ScriptSection(
-                voiceover_text=section["voiceover_text"],
-                scene_description=section["scene_description"],
-                visual_suggestions=section["visual_suggestions"],
-                heading=section["heading"],
-            )
-            for section in raw["main_sections"]
-        ],
-        ending=_beat_from(raw["ending"]),
-        call_to_action=_beat_from(raw["call_to_action"]),
-    )
 
 
 class ScriptGenerator:
@@ -261,7 +111,7 @@ class ScriptGenerator:
                 research_notes=context.research.research_notes,
                 target_duration_sec=context.research.suggested_length_sec,
                 knowledge_package_context=(
-                    _render_knowledge_package_context(context.knowledge_package)
+                    render_knowledge_package_context(context.knowledge_package)
                     if context.knowledge_package
                     else None
                 ),
@@ -307,4 +157,4 @@ class ScriptGenerator:
         if not tool_use.input["main_sections"]:
             raise ScriptGenerationError("Claude returned a script with no main sections")
 
-        return _to_generated_script(tool_use.input)
+        return script_from_dict(tool_use.input)

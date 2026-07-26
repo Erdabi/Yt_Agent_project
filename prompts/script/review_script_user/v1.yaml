@@ -1,0 +1,18 @@
+template: |
+  {% if knowledge_package_context %}
+  Knowledge package this script should be grounded in:
+  {{ knowledge_package_context }}
+
+  {% endif %}
+  Drafted script to review (JSON):
+  {{ draft_script_json }}
+
+  Review this script now.
+metadata:
+  description: >
+    Per-call context for the Script Agent's self-review call
+    (services/agent_scriptwriter/app/script_reviewer.py). Variables:
+    draft_script_json (required — the drafted script, in the same JSON
+    shape propose_script/submit_reviewed_script use), knowledge_package_context
+    (optional).
+  owner: script-agent

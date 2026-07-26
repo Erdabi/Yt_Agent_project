@@ -24,7 +24,8 @@ yt-agent/
 │   ├── manager/{workflow_decision_system/, workflow_decision_user/}
 │   ├── research/{generate_ideas_system/, generate_ideas_user/,
 │   │             build_knowledge_package_system/, build_knowledge_package_user/}
-│   ├── script/{generate_script_system/, generate_script_user/}
+│   ├── script/{generate_script_system/, generate_script_user/,
+│   │           review_script_system/, review_script_user/}
 │   ├── video/{storyboard_shot_planning/, thumbnail_prompt/}
 │   └── qa/policy_review/
 │
@@ -54,7 +55,9 @@ yt-agent/
 │   │   ├── Dockerfile
 │   │   └── app/
 │   │       ├── worker.py             # ScriptwriterAgent: builds a ProjectContext, persists Script + ScriptSegments
-│   │       └── script_generator.py   # hook/intro/main sections/ending/CTA (forced tool use, prompts from prompts/script/)
+│   │       ├── script_generator.py   # drafts hook/intro/main sections/ending/CTA (forced tool use, prompts from prompts/script/)
+│   │       ├── script_reviewer.py    # lightweight self-review pass: factual consistency, retention, repetition
+│   │       └── script_schema.py      # shared script/production-metadata schema used by both generator and reviewer
 │   │
 │   ├── agent_video/                  # one agent, four internal modules — replaces what used to be
 │   │   │                             # four separate services/stages (storyboard, voiceover,

@@ -1,5 +1,5 @@
 from sqlalchemy import Enum, ForeignKey, Integer, String, Text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from libs.models.base import Base, CreatedAtMixin, UUIDPrimaryKeyMixin
@@ -32,6 +32,12 @@ class Script(Base, UUIDPrimaryKeyMixin, CreatedAtMixin):
     # they live on the script as a whole rather than on any one segment.
     structure_notes: Mapped[str | None] = mapped_column(Text)
     retention_notes: Mapped[str | None] = mapped_column(Text)
+    # What the Script Agent's self-review pass checked and changed (or
+    # why review was skipped) — see
+    # services/agent_scriptwriter/app/script_reviewer.py. Nullable only
+    # for rows written before this column existed; every script produced
+    # by that module always sets it, even to a "skipped: <reason>" note.
+    review_notes: Mapped[str | None] = mapped_column(Text)
     status: Mapped[ScriptStatus] = mapped_column(
         Enum(ScriptStatus, name="script_status", native_enum=True),
         nullable=False,
@@ -73,6 +79,17 @@ class ScriptSegment(Base, UUIDPrimaryKeyMixin):
     # (services/agent_video/app/modules/storyboard.py) resolves these
     # into concrete assets once implemented.
     visual_notes: Mapped[str | None] = mapped_column(Text)
+    # Structured production metadata for this beat — camera framing,
+    # visual asset type, transition, pacing, narration emotion, emphasis
+    # words, estimated speech speed, on-screen text — validated against
+    # services/agent_scriptwriter/app/script_schema.py's
+    # `SegmentProductionMetadata` on the way in. JSONB rather than one
+    # column per field: the Video Agent always reads this whole bundle
+    # together for one beat, it never filters segments by an individual
+    # field via SQL, so there's nothing a relational column would buy
+    # over a single validated blob (same reasoning as
+    # `Channel.persona_config`).
+    production_metadata: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
 
     script: Mapped["Script"] = relationship(back_populates="segments")
     storyboard_shots: Mapped[list["StoryboardShot"]] = relationship(

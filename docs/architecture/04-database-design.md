@@ -98,6 +98,7 @@ Written by the Script Agent (`services/agent_scriptwriter`) — see
 | word_count | int | |
 | structure_notes | text, nullable | the story structure chosen (e.g. "problem → agitation → solution") and why |
 | retention_notes | text, nullable | the concrete retention techniques used and where (open loops, pattern interrupts, callbacks) |
+| review_notes | text, nullable | what the self-review pass (`script_reviewer.py`) checked/changed, or why review was skipped |
 | status | enum | `draft`, `approved`, `superseded` |
 | created_at | timestamptz | |
 
@@ -108,9 +109,28 @@ Written by the Script Agent (`services/agent_scriptwriter`) — see
 | order_index | int | |
 | segment_type | enum | `hook`, `introduction`, `main_section`, `ending`, `call_to_action` |
 | text | text | voice-over narration for this beat |
-| estimated_duration_sec | int | word-count-based estimate; the Storyboard/Voice-over modules refine this once real audio exists |
+| estimated_duration_sec | int | word count ÷ this beat's own `production_metadata.estimated_speech_wpm` (clamped 80-220); the Voice-over module refines this once real audio exists |
 | scene_notes | text | what's happening on screen during this beat (main sections are prefixed with their internal heading) |
 | visual_notes | text, nullable | concrete visual/b-roll/on-screen-text suggestions — distinct from `scene_notes` |
+| production_metadata | jsonb | structured per-beat production metadata the Video Agent consumes directly — see below |
+
+`production_metadata` (validated against
+`services/agent_scriptwriter/app/script_schema.py`'s
+`SegmentProductionMetadata` before it's ever written) — one column, not
+one per field, since the Video Agent always reads the whole bundle
+together for a beat and never filters segments by an individual field via
+SQL (same reasoning as `Channel.persona_config`):
+
+| key | type | notes |
+|---|---|---|
+| camera_framing | string | free text (e.g. "wide shot", "close-up", "over-the-shoulder") |
+| visual_asset_type | enum | `stock` / `ai_image` / `ai_video` / `text_overlay` — reuses `libs.models.enums.ShotType`, the same vocabulary `storyboard_shots.shot_type` uses |
+| transition_type | enum | `cut` / `fade` / `dissolve` / `wipe` / `zoom` / `slide` / `match_cut` |
+| pacing | enum | `fast` / `medium` / `slow` — editing rhythm, independent of narration speed |
+| narration_emotion | string | free text (e.g. "curious", "urgent", "reassuring") |
+| emphasis_words | string[] | words/phrases in this beat's `text` worth vocal or caption emphasis |
+| estimated_speech_wpm | int | this beat's own narration speed (80-220), used to derive `estimated_duration_sec` |
+| on_screen_text | string[] | optional text overlays for this beat (title card, key stat, callout) |
 
 ### `storyboard_shots`
 | column | type | notes |

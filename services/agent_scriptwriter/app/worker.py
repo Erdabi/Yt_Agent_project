@@ -4,16 +4,23 @@ Turns an approved, researched video idea into a complete,
 production-ready script: a strong opening hook, an introduction, a
 deliberately chosen story structure, the main body sections, retention
 techniques woven throughout, an ending, and a call to action — each beat
-carrying voice-over text, a scene description, and visual suggestions.
-See docs/architecture/03-agent-responsibilities.md §3.3.
+carrying voice-over text, a scene description, and structured production
+metadata (camera framing, visual asset type, transition, pacing,
+narration emotion, emphasis words, speech speed, on-screen text). See
+docs/architecture/03-agent-responsibilities.md §3.3.
 
 Loads everything it needs through the Project Context Builder
 (`libs.context.build_project_context`) instead of separately querying the
 channel, project, idea, and knowledge package itself — see
-libs/context/builder.py. The actual generation call lives in
-script_generator.py; this module's job is dispatch plumbing and
-persistence: turning a `GeneratedScript` into a versioned `scripts` row
-plus its ordered `script_segments`.
+libs/context/builder.py. Generation (script_generator.py) drafts the
+script; a self-review pass (script_reviewer.py) checks it for factual
+consistency against the Knowledge Package, viewer retention, and
+repetition, and returns an improved version — always run before anything
+is persisted. This module's own job is dispatch plumbing and persistence:
+turning the final `GeneratedScript` into a versioned `scripts` row plus
+its ordered `script_segments`, fully structured (including each
+segment's `production_metadata`) so the Video Agent can consume it
+directly without further parsing.
 """
 
 from typing import Any
@@ -30,20 +37,27 @@ from libs.models.enums import ScriptSegmentType, ScriptStatus
 from libs.models.script import Script, ScriptSegment
 from libs.schemas.jobs import JobContext
 
-from .script_generator import GeneratedScript, ScriptBeat, ScriptGenerator
+from .script_generator import ScriptGenerator
+from .script_reviewer import ScriptReviewer
+from .script_schema import GeneratedScript, ScriptBeat
 
 logger = get_logger(__name__)
 
-#: Rough narration pace used to estimate each segment's spoken duration
-#: from its word count. Not a precise prediction — the real duration
-#: comes from the Voice-over module once actual audio exists
-#: (services/agent_video/app/modules/voiceover.py) — just enough for the
-#: Storyboard module to plan shot lengths before that audio exists.
-_WORDS_PER_MINUTE = 150
+#: `SegmentProductionMetadata.estimated_speech_wpm` is bounded the same
+#: way in the tool schema (script_schema.py), but this is Claude-supplied
+#: data feeding a duration calculation — clamped again here rather than
+#: trusted outright, same defensive posture as the Manager enforcing its
+#: own retry ceiling instead of trusting the reasoning engine's arithmetic
+#: (services/orchestrator/app/manager/manager.py).
+_MIN_SPEECH_WPM = 80
+_MAX_SPEECH_WPM = 220
 
 #: (agent, prompt name) passed to `build_project_context` to resolve
 #: `ProjectContext.prompt_version` — this agent's own prompt slot (see
-#: prompts/script/generate_script_system/).
+#: prompts/script/generate_script_system/). The review prompt slot
+#: (prompts/script/review_script_system/) is versioned in lockstep with
+#: this one under the same SCRIPT_PROMPT_VERSION setting, so one resolved
+#: version serves both calls.
 _CONSUMER_PROMPT = ("script", "generate_script_system")
 
 
@@ -52,6 +66,7 @@ class ScriptwriterAgent(BaseAgent):
 
     def __init__(self) -> None:
         self._generator = ScriptGenerator()
+        self._reviewer = ScriptReviewer()
 
     def run(self, context: JobContext) -> dict[str, Any]:
         if not context.project_id:
@@ -61,22 +76,24 @@ class ScriptwriterAgent(BaseAgent):
             )
 
         project_context = build_project_context(context.project_id, consumer_prompt=_CONSUMER_PROMPT)
-        generated = self._generator.generate(project_context)
-        script_id, version = self._store_script(context.project_id, project_context, generated)
+        draft = self._generator.generate(project_context)
+        final = self._reviewer.review(project_context, draft)
+        script_id, version = self._store_script(context.project_id, project_context, final)
 
         logger.info(
             "script_generated",
             project_id=context.project_id,
             script_id=script_id,
             version=version,
-            section_count=len(generated.main_sections),
+            section_count=len(final.main_sections),
         )
         return {
             "script_id": script_id,
             "version": version,
-            "structure_notes": generated.structure_notes,
-            "retention_notes": generated.retention_notes,
-            "section_count": len(generated.main_sections),
+            "structure_notes": final.structure_notes,
+            "retention_notes": final.retention_notes,
+            "review_notes": final.review_notes,
+            "section_count": len(final.main_sections),
         }
 
     def _store_script(
@@ -116,6 +133,7 @@ class ScriptwriterAgent(BaseAgent):
                 word_count=word_count,
                 structure_notes=generated.structure_notes,
                 retention_notes=generated.retention_notes,
+                review_notes=generated.review_notes,
                 status=ScriptStatus.DRAFT,
             )
             session.add(script)
@@ -124,6 +142,7 @@ class ScriptwriterAgent(BaseAgent):
             for order_index, (segment_type, beat, heading) in enumerate(beats):
                 scene_notes = f"[{heading}] {beat.scene_description}" if heading else beat.scene_description
                 words = len(beat.voiceover_text.split())
+                wpm = max(_MIN_SPEECH_WPM, min(_MAX_SPEECH_WPM, beat.production.estimated_speech_wpm))
                 session.add(
                     ScriptSegment(
                         script_id=script.id,
@@ -132,7 +151,8 @@ class ScriptwriterAgent(BaseAgent):
                         text=beat.voiceover_text,
                         scene_notes=scene_notes,
                         visual_notes=beat.visual_suggestions,
-                        estimated_duration_sec=max(1, round(words / _WORDS_PER_MINUTE * 60)),
+                        estimated_duration_sec=max(1, round(words / wpm * 60)),
+                        production_metadata=beat.production.model_dump(mode="json"),
                     )
                 )
 
