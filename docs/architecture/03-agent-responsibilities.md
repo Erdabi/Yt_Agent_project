@@ -131,26 +131,70 @@ runs in one of two modes:
 
 ## 3.3 Script Writing Agent
 
-- **Input:** an approved `video_idea`.
-- **Does:** generates a full script from a configurable prompt template (hook →
-  body → CTA → outro) honoring brand voice/tone config; breaks the script into
-  timed segments for the Video Agent's storyboard module (§3.4.1); optionally
-  runs a fact-check pass
-  (second LLM call, or retrieval against a trusted source set) for
-  claim-heavy niches.
-- **Output:** a versioned `scripts` row plus `script_segments`.
-- **Failure mode:** LLM output failing schema validation (missing sections,
-  wildly wrong length) triggers an automatic single re-prompt before failing
-  the job — cheap to retry, expensive to send bad input downstream.
-- **Prompt:** `prompts/script/generate_script/` (draft — not wired into real
-  code yet, see §6 Phase 1).
-- **Context:** once implemented, receives one `ProjectContext` from
-  `libs.context.build_project_context(project_id)` — Channel Profile, Project
-  metadata, Research summary, Knowledge Package, resolved prompt version, and
-  Manager settings, gathered in a single immutable object — instead of
-  separately querying the channel, project, idea, and knowledge package
-  itself the way `services/agent_research/app/worker.py` does today. See
+Implemented (`services/agent_scriptwriter`). Its only responsibility is
+turning one already-researched, approved idea into a complete,
+production-ready script — it does not choose the topic or do its own
+research; the Research Agent (§3.2) already did that.
+
+- **Input:** always Manager-dispatched against an existing `Project`, with
+  an empty payload (`ManagerAgent._advance` dispatches every stage with
+  `{}` — see `services/orchestrator/app/manager/manager.py`). The agent
+  loads everything it needs itself via
+  `libs.context.build_project_context(project_id)` — Channel Profile,
+  Project metadata, Research summary, Knowledge Package (when the idea has
+  one), resolved prompt version, and Manager settings, gathered into a
+  single immutable `ProjectContext` in one call — instead of separately
+  querying the channel, project, idea, and knowledge package itself the way
+  `services/agent_research/app/worker.py` does. See
   [Folder Structure](./02-folder-structure.md)'s `libs/context/` entry.
+- **Does:** one structured Claude call (`script_generator.py`, forced tool
+  use, prompts loaded from `prompts/script/` via `libs/prompts`) that
+  returns a complete script in one response:
+  - a strong opening **hook**, an **introduction** that earns the promise
+    the hook made, a body broken into as many **main sections** as the
+    topic needs, an **ending** that closes the throughline the hook
+    opened, and a single, specific **call to action**;
+  - a deliberately chosen **story structure** (e.g. problem → agitation →
+    solution, chronological case study, before/after/bridge), explained in
+    `structure_notes` rather than left implicit;
+  - **retention techniques** — open loops, pattern interrupts, callbacks,
+    curiosity gaps — woven through the script itself and documented
+    concretely (with placement) in `retention_notes`, rather than treated
+    as a separate segment;
+  - every beat (hook, introduction, each main section, ending, CTA)
+    carries `voiceover_text` (exact narration, written for spoken
+    delivery), a `scene_description` (what's on screen), and
+    `visual_suggestions` (concrete b-roll/on-screen-text/shot ideas — never
+    generic "add engaging visuals").
+
+  When the idea has a Knowledge Package, the agent writes from its
+  verified facts, timeline, entities, and hooks directly instead of
+  inventing claims of its own — the same "don't fabricate" discipline the
+  Research Agent's `knowledge_builder.py` follows. Like `idea_generator.py`,
+  there is no deterministic fallback: a missing API key, a failed call, a
+  refusal, an empty `main_sections` list, or a malformed response all raise
+  `ScriptGenerationError` and fail the job honestly — a fabricated
+  placeholder script would defeat the entire point of this agent.
+- **Output:** a versioned `scripts` row (`content` — the full narration,
+  concatenated in order; `structure_notes`; `retention_notes`;
+  `target_duration_sec`; `word_count`; `status=draft`) plus one ordered
+  `script_segments` row per beat (`segment_type` — hook / introduction /
+  main_section / ending / call_to_action; `text` — the voiceover;
+  `scene_notes` — the scene description, prefixed with the section's
+  internal heading for main sections; `visual_notes` — the visual
+  suggestions; `estimated_duration_sec` — a rough word-count-based
+  estimate for the Storyboard module to plan shot lengths with, before
+  real voiceover audio exists). Scripts are versioned, never mutated in
+  place — a regeneration for the same project gets `version = max(existing) +
+  1`, so a QA-triggered rewrite never overwrites what it's replacing.
+- **Failure mode:** any Claude-call failure raises `ScriptGenerationError`
+  and fails the job, which the Manager's reasoning engine then retries or
+  escalates like any other agent failure — no automatic re-prompt inside
+  this agent itself.
+- **Prompts:** `prompts/script/generate_script_system/` +
+  `generate_script_user/`, each with a Claude-specific system-prompt
+  override (`v1.claude.yaml`) noting the forced `tool_choice`, same pattern
+  as `prompts/research/generate_ideas_system/`.
 
 ## 3.4 Video Agent
 

@@ -3,7 +3,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from libs.models.base import Base, CreatedAtMixin, UUIDPrimaryKeyMixin
-from libs.models.enums import ScriptStatus
+from libs.models.enums import ScriptSegmentType, ScriptStatus
 
 
 class Script(Base, UUIDPrimaryKeyMixin, CreatedAtMixin):
@@ -25,6 +25,13 @@ class Script(Base, UUIDPrimaryKeyMixin, CreatedAtMixin):
     tone: Mapped[str | None] = mapped_column(String(100))
     target_duration_sec: Mapped[int | None] = mapped_column(Integer)
     word_count: Mapped[int | None] = mapped_column(Integer)
+    # The narrative structure/story arc the Script Agent deliberately
+    # chose (e.g. "problem -> agitation -> solution") and the concrete
+    # retention techniques it wove through the script (open loops,
+    # pattern interrupts, callbacks) and where — both cross-cutting, so
+    # they live on the script as a whole rather than on any one segment.
+    structure_notes: Mapped[str | None] = mapped_column(Text)
+    retention_notes: Mapped[str | None] = mapped_column(Text)
     status: Mapped[ScriptStatus] = mapped_column(
         Enum(ScriptStatus, name="script_status", native_enum=True),
         nullable=False,
@@ -51,9 +58,21 @@ class ScriptSegment(Base, UUIDPrimaryKeyMixin):
         index=True,
     )
     order_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Which structural beat this is (hook, introduction, a main body
+    # section, ending, call to action) — see libs/models/enums.py.
+    segment_type: Mapped[ScriptSegmentType] = mapped_column(
+        Enum(ScriptSegmentType, name="script_segment_type", native_enum=True),
+        nullable=False,
+    )
     text: Mapped[str] = mapped_column(Text, nullable=False)
     estimated_duration_sec: Mapped[int | None] = mapped_column(Integer)
     scene_notes: Mapped[str | None] = mapped_column(Text)
+    # Concrete visual/b-roll/on-screen-graphic ideas for this beat —
+    # distinct from `scene_notes` (what's happening on screen); this is
+    # what it should look like. The Storyboard module
+    # (services/agent_video/app/modules/storyboard.py) resolves these
+    # into concrete assets once implemented.
+    visual_notes: Mapped[str | None] = mapped_column(Text)
 
     script: Mapped["Script"] = relationship(back_populates="segments")
     storyboard_shots: Mapped[list["StoryboardShot"]] = relationship(

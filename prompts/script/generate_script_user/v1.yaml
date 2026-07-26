@@ -1,0 +1,30 @@
+template: |
+  Video topic: {{ topic }}
+  {% if description %}Idea description: {{ description }}
+  {% endif %}
+  Target audience: {{ target_audience }}
+  Channel niche: {{ channel_niche }}
+  Channel persona / tone: {{ channel_persona }}
+  {% if banned_topics %}Banned topics (never reference these): {{ banned_topics | join(", ") }}
+  {% endif %}
+  {% if suggested_angle %}Suggested creative angle: {{ suggested_angle }}
+  {% endif %}
+  {% if keywords %}SEO keywords to work in naturally: {{ keywords | join(", ") }}
+  {% endif %}
+  {% if research_notes %}Research notes: {{ research_notes }}
+  {% endif %}
+  {% if target_duration_sec %}Target video length: {{ target_duration_sec }} seconds
+  {% endif %}
+  {% if knowledge_package_context %}
+  Research findings to write from (do not invent claims beyond this):
+  {{ knowledge_package_context }}
+  {% endif %}
+  Write the complete script now.
+metadata:
+  description: >
+    Per-call context for the Script Agent's generation call
+    (services/agent_scriptwriter/app/script_generator.py). Variables:
+    topic, target_audience, channel_niche, channel_persona (required);
+    description, banned_topics, suggested_angle, keywords, research_notes,
+    target_duration_sec, knowledge_package_context (optional).
+  owner: script-agent

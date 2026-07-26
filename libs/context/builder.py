@@ -35,9 +35,10 @@ def build_project_context(
     # (agent, prompt name) the *caller* is about to render a prompt for —
     # used only to resolve `ProjectContext.prompt_version` to the concrete
     # version that agent's `<agent>_prompt_version` setting currently
-    # points at. Defaults to the Script Agent since it's this object's
-    # first real consumer (see schema.py's module docstring).
-    consumer_prompt: tuple[str, str] = ("script", "generate_script"),
+    # points at. Defaults to the Script Agent's system-prompt slot since
+    # it's this object's first real consumer (see schema.py's module
+    # docstring and services/agent_scriptwriter/app/script_generator.py).
+    consumer_prompt: tuple[str, str] = ("script", "generate_script_system"),
 ) -> ProjectContext:
     with sync_session_scope() as session:
         project = session.get(Project, UUID(project_id))

@@ -11,10 +11,9 @@ accidentally mutating shared state would be a much harder bug to track
 down than the `ValidationError` a frozen model raises immediately instead.
 
 The Script Agent (services/agent_scriptwriter) is this object's first
-real consumer, once its generation logic lands (see that service's
-worker.py docstring) — it receives one `ProjectContext` instead of
-separately loading the channel, project, research fields, and knowledge
-package the way services/agent_research/app/worker.py currently does.
+real consumer — it receives one `ProjectContext` instead of separately
+loading the channel, project, research fields, and knowledge package the
+way services/agent_research/app/worker.py does.
 """
 
 from datetime import datetime

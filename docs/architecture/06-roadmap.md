@@ -23,9 +23,10 @@ for a single developer, not commitments.
   a real media-producing agent has something to write to from day one.
 - Prompt Management System (`libs/prompts`, `prompts/`): versioned
   template files with variables and provider-specific overrides, replacing
-  Python string constants. **Done** — the Manager Agent's reasoning engine
-  already loads its prompts this way; Research/Script/Video/QA each have a
-  draft `v1` template waiting for the real LLM call that will load it.
+  Python string constants. **Done** — the Manager, Research, and Script
+  agents' real Claude calls all load their prompts this way; Video/QA each
+  still have a draft `v1` template waiting for the real LLM call that will
+  load it.
 - Alembic baseline migration for the core schema
   ([Database Design §4.2](./04-database-design.md#core-tables)).
 - CI pipeline skeleton (lint, type-check, test, build images).
@@ -52,7 +53,12 @@ for a single developer, not commitments.
   dedup remain Phase 4, as originally planned; automatic scheduling for
   discover mode (a daily ideation run per channel) is unbuilt too — it's
   callable today but nothing calls it on a cadence yet.
-- Script Agent with one real LLM provider.
+- Script Agent with one real LLM provider. **Done** — one structured Claude
+  call producing hook, introduction, a deliberately chosen story structure,
+  main sections, retention techniques, ending, and call to action, each
+  beat with voice-over text, a scene description, and visual suggestions;
+  writes from the Research Agent's Knowledge Package when one exists;
+  persisted as a versioned `scripts` row plus ordered `script_segments`.
 - Video Agent's modules land one real implementation at a time, in-process
   (no separate agents/queues to coordinate — see
   [Agent Responsibilities §3.4](./03-agent-responsibilities.md#34-video-agent)):

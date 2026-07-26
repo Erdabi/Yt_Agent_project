@@ -24,7 +24,7 @@ yt-agent/
 │   ├── manager/{workflow_decision_system/, workflow_decision_user/}
 │   ├── research/{generate_ideas_system/, generate_ideas_user/,
 │   │             build_knowledge_package_system/, build_knowledge_package_user/}
-│   ├── script/generate_script/
+│   ├── script/{generate_script_system/, generate_script_user/}
 │   ├── video/{storyboard_shot_planning/, thumbnail_prompt/}
 │   └── qa/policy_review/
 │
@@ -50,8 +50,11 @@ yt-agent/
 │   │       └── trend_sources/        # base.py, seed_list.py (real), youtube_trending.py,
 │   │                                 # google_trends.py, reddit.py, rss.py (stubs), aggregator.py
 │   │
-│   ├── agent_scriptwriter/
-│   │   └── app/{worker.py, fact_check.py}
+│   ├── agent_scriptwriter/            # implemented — see 03-agent-responsibilities.md §3.3
+│   │   ├── Dockerfile
+│   │   └── app/
+│   │       ├── worker.py             # ScriptwriterAgent: builds a ProjectContext, persists Script + ScriptSegments
+│   │       └── script_generator.py   # hook/intro/main sections/ending/CTA (forced tool use, prompts from prompts/script/)
 │   │
 │   ├── agent_video/                  # one agent, four internal modules — replaces what used to be
 │   │   │                             # four separate services/stages (storyboard, voiceover,

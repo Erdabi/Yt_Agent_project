@@ -94,6 +94,21 @@ class ProviderCapability(str, enum.Enum):
     STOCK_MEDIA = "stock_media"
 
 
+class ScriptSegmentType(str, enum.Enum):
+    """Which structural beat a `ScriptSegment` represents — set by the
+    Script Agent (services/agent_scriptwriter). The story structure and
+    retention techniques the Script Agent chooses are cross-cutting
+    concerns documented on the `Script` row itself
+    (`structure_notes`/`retention_notes`), not their own segment type.
+    """
+
+    HOOK = "hook"
+    INTRODUCTION = "introduction"
+    MAIN_SECTION = "main_section"
+    ENDING = "ending"
+    CALL_TO_ACTION = "call_to_action"
+
+
 class CompetitionLevel(str, enum.Enum):
     """How saturated a video idea's specific angle already is on YouTube —
     set by the Research Agent (services/agent_research), not a measure of

@@ -84,15 +84,20 @@ The central pipeline-instance row.
 | created_at / updated_at | timestamptz | |
 
 ### `scripts` / `script_segments`
+Written by the Script Agent (`services/agent_scriptwriter`) — see
+[Agent Responsibilities §3.3](./03-agent-responsibilities.md).
+
 | `scripts` | | |
 |---|---|---|
 | id | uuid PK | |
 | project_id | uuid FK → projects | |
-| version | int | scripts are versioned, not overwritten |
-| content | text | full script |
+| version | int | scripts are versioned, not overwritten — a regeneration gets `max(existing)+1` |
+| content | text | full narration, every segment's `text` concatenated in order |
 | tone | text | |
 | target_duration_sec | int | |
 | word_count | int | |
+| structure_notes | text, nullable | the story structure chosen (e.g. "problem → agitation → solution") and why |
+| retention_notes | text, nullable | the concrete retention techniques used and where (open loops, pattern interrupts, callbacks) |
 | status | enum | `draft`, `approved`, `superseded` |
 | created_at | timestamptz | |
 
@@ -101,9 +106,11 @@ The central pipeline-instance row.
 | id | uuid PK | |
 | script_id | uuid FK → scripts | |
 | order_index | int | |
-| text | text | |
-| estimated_duration_sec | int | |
-| scene_notes | text | |
+| segment_type | enum | `hook`, `introduction`, `main_section`, `ending`, `call_to_action` |
+| text | text | voice-over narration for this beat |
+| estimated_duration_sec | int | word-count-based estimate; the Storyboard/Voice-over modules refine this once real audio exists |
+| scene_notes | text | what's happening on screen during this beat (main sections are prefixed with their internal heading) |
+| visual_notes | text, nullable | concrete visual/b-roll/on-screen-text suggestions — distinct from `scene_notes` |
 
 ### `storyboard_shots`
 | column | type | notes |

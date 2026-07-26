@@ -124,10 +124,11 @@ class Settings(BaseSettings):
     manager_prompt_version: str = Field(default="latest", alias="MANAGER_PROMPT_VERSION")
 
     # --- Script Agent: prompt template version ------------------------------
-    # Which version of prompts/script/generate_script/ the Project Context
-    # Builder (libs/context) resolves for the Script Agent to use. Same
-    # rationale as manager_prompt_version: pin it to roll back a wording
-    # change without a code change.
+    # Which version of prompts/script/generate_script_system/ (and its
+    # generate_script_user/ counterpart) the Project Context Builder
+    # (libs/context) resolves for the Script Agent to use. Same rationale
+    # as manager_prompt_version: pin it to roll back a wording change
+    # without a code change.
     script_prompt_version: str = Field(default="latest", alias="SCRIPT_PROMPT_VERSION")
 
     @computed_field  # type: ignore[misc]
