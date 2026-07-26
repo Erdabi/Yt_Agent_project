@@ -60,6 +60,11 @@ class Voiceover(Base, UUIDPrimaryKeyMixin):
     )
     provider: Mapped[str | None] = mapped_column(String(100))
     voice_id: Mapped[str | None] = mapped_column(String(100))
+    # Which concrete TTS model the provider used (e.g. "eleven_multilingual_v2")
+    # — distinct from `provider` (the vendor/class), since one vendor can
+    # offer several models with different quality/latency/cost tradeoffs.
+    model: Mapped[str | None] = mapped_column(String(100))
+    language: Mapped[str | None] = mapped_column(String(20))
     duration_sec: Mapped[float | None] = mapped_column(Numeric(8, 2))
 
     script_segment: Mapped["ScriptSegment"] = relationship(back_populates="voiceovers")

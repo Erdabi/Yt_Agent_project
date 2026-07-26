@@ -35,6 +35,13 @@
 # codebase has real GCP credentials to implement against (veo) — see
 # each module's own docstring.
 #
+# `tts` similarly has one real, working adapter alongside its stub:
+# `elevenlabs` (libs/providers/tts/elevenlabs_provider.py), against
+# ElevenLabs' public API — `active` stays `stub` here until a real
+# ELEVENLABS_API_KEY is configured. `azure_speech` remains an honest
+# stub for the same reason as `invideo`/`veo`: no Azure resource exists
+# here to implement and verify a real token-based integration against.
+#
 # Every capability's active provider can also be overridden per-process
 # without editing this file at all, via an environment variable named
 # `{CAPABILITY}_PROVIDER` — e.g. `VIDEO_GEN_PROVIDER=runway` — read by
@@ -81,18 +88,37 @@ video_gen:
       secret_ref: GOOGLE_VEO_API_KEY
 
 tts:
+  # Stays the default here so the repo boots without any tts API key
+  # configured — flip this to "elevenlabs" (a real, working adapter)
+  # once ELEVENLABS_API_KEY is set, or override per-environment with the
+  # TTS_PROVIDER env var (libs/providers/registry.py) without touching
+  # this file at all.
   active: stub
   providers:
     stub:
       class: libs.providers.tts.stub_provider.StubTTSProvider
       config: {}
-  # Real provider example (ElevenLabs — Phase 1): add
-  # libs/providers/tts/elevenlabs_provider.py subclassing TTSProvider, then:
-  #   elevenlabs:
-  #     class: libs.providers.tts.elevenlabs_provider.ElevenLabsProvider
-  #     config: {voice_id: ""}
-  #     secret_ref: ELEVENLABS_API_KEY
-  # and set active: elevenlabs.
+    # Real, working adapter (libs/providers/tts/elevenlabs_provider.py)
+    # against ElevenLabs' public API (elevenlabs.io/docs/api-reference).
+    elevenlabs:
+      class: libs.providers.tts.elevenlabs_provider.ElevenLabsProvider
+      config:
+        voice_id: "21m00Tcm4TlvDq8ikWAM"  # "Rachel", a commonly-used premade voice
+        model_id: eleven_multilingual_v2
+        output_format: mp3_44100_128
+        max_attempts: 3
+        retry_backoff_sec: 2
+        timeout_sec: 60
+      secret_ref: ELEVENLABS_API_KEY
+    # Honest stub (libs/providers/tts/azure_speech_provider.py) — needs a
+    # real Azure resource (region + access-token exchange) to implement
+    # and verify against; see that module's docstring.
+    azure_speech:
+      class: libs.providers.tts.azure_speech_provider.AzureSpeechProvider
+      config:
+        region: eastus
+        voice_name: en-US-JennyNeural
+      secret_ref: AZURE_SPEECH_API_KEY
 
 image_gen:
   active: stub

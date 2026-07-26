@@ -194,13 +194,22 @@ lives here, pointing at object storage (MinIO/S3), not at the database.
 
 ### `voiceovers`, `renders`, `thumbnails`
 Thin join tables linking a stage's output to an `assets` row plus
-stage-specific metadata (voice id/provider for `voiceovers`; render engine and
-final duration for `renders`; `is_selected` flag and A/B variant label for
-`thumbnails`). `voiceovers` is written by the Video Agent's Voice Generation
-module; `renders` by its Rendering module, via the `editor` capability's real
-ffmpeg-based compositor (§3.4); `thumbnails` by its Thumbnail Generation
-module — one variant per project today (`is_selected` always true), automated
-A/B variant testing being a later phase (§6, Phase 4).
+stage-specific metadata (voice id/provider/model/language for `voiceovers`;
+render engine and final duration for `renders`; `is_selected` flag and A/B
+variant label for `thumbnails`). `voiceovers` is written by the Video Agent's
+Voice Generation module; `renders` by its Rendering module, via the `editor`
+capability's real ffmpeg-based compositor (§3.4); `thumbnails` by its
+Thumbnail Generation module — one variant per project today (`is_selected`
+always true), automated A/B variant testing being a later phase (§6, Phase 4).
+
+`voiceovers.model`/`.language` (alongside the pre-existing `.provider`/
+`.voice_id`) complete the metadata bundle the real TTS provider interface
+reports back per call (`libs.providers.tts.base.SynthesisResult`) — added
+in migration `523cb69e24aa`. Per-word timing itself doesn't fit a scalar
+column, so it's mirrored into the corresponding `assets.metadata` JSONB
+row instead (`{"word_timings": [...], "model", "voice_id", "language",
+"segment_id"}`), durably, regardless of whether that segment's narration
+was a fresh provider call or an Asset Cache hit.
 
 ### `asset_cache_entries`
 The Video Agent's Asset Cache index (`services/agent_video/app/asset_cache.py`,

@@ -73,23 +73,27 @@ for a single developer, not commitments.
   Postgres, producing an actual playable MP4 and thumbnail image, and
   confirming the Asset Cache (below) makes a second, identical request
   reuse prior output with zero new provider calls. What's still a real
-  *vendor* integration away: `image_gen`/`stock_media`/`audio_library`/
-  `tts` are all still the `stub` implementation (config/providers.yaml,
-  `active: stub`) — no AI-generated visuals or real narration yet, MVP
-  relies on whichever of those get wired to a real vendor first.
-  `video_gen` now has one real, verified adapter (Runway ML —
-  `libs/providers/video_gen/runway_provider.py`, authentication/request
-  creation/polling/download/error-handling all real, proven end to end
-  with a mocked HTTP layer standing in for Runway's actual servers) plus
-  two honest stubs (InVideo AI, Google Veo) rather than fabricated
-  integrations for either — neither has a verifiable public API contract
-  this codebase could implement against safely (see
-  `invideo_provider.py`/`veo_provider.py`'s own docstrings).
-  `video_gen.active` stays `stub` by default until a real
-  `RUNWAY_API_KEY` is configured, so nothing calls a paid vendor
-  out of the box; switching it (or any capability) to a different
-  registered provider is a `config/providers.yaml` edit or a
-  `{CAPABILITY}_PROVIDER` environment variable, never a code change.
+  *vendor* integration away: `image_gen`/`stock_media`/`audio_library`
+  are all still the `stub` implementation (config/providers.yaml,
+  `active: stub`) — no AI-generated visuals yet, MVP relies on whichever
+  of those get wired to a real vendor first.
+  `video_gen` and `tts` each now have one real, verified adapter — Runway
+  ML (`libs/providers/video_gen/runway_provider.py`) and ElevenLabs
+  (`libs/providers/tts/elevenlabs_provider.py`), authentication/request
+  creation/error-handling all real, proven end to end with a mocked HTTP
+  layer standing in for each vendor's actual servers (Runway's async
+  create/poll/download flow; ElevenLabs' single synchronous call,
+  converting its per-character alignment into the per-word timing
+  `SynthesisResult` promises) — plus honest stubs for their alternatives
+  (InVideo AI, Google Veo, Azure Speech) rather than fabricated
+  integrations for any of them: none has a verifiable public API contract
+  this codebase could implement against safely (see each module's own
+  docstring). Both `video_gen.active` and `tts.active` stay `stub` by
+  default until a real `RUNWAY_API_KEY`/`ELEVENLABS_API_KEY` is
+  configured, so nothing calls a paid vendor out of the box; switching
+  either (or any capability) to a different registered provider is a
+  `config/providers.yaml` edit or a `{CAPABILITY}_PROVIDER` environment
+  variable, never a code change.
   `editor` (video compositing) needs no vendor account at all, so its
   real ffmpeg-based provider (`libs/providers/editor/ffmpeg_provider.py`)
   already composites images/video clips + narration + supplementary

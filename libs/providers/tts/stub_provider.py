@@ -1,8 +1,8 @@
-"""The only `tts` provider configured today (see config/providers.yaml).
-Exists so the config-file switching mechanism itself is fully real and
-testable (libs/providers/registry.py), without fabricating an actual TTS
-vendor integration, which is deferred to Phase 1
-(docs/architecture/06-roadmap.md).
+"""The default `tts` provider (see config/providers.yaml's `active: stub`)
+— stays the default so nothing calls a paid vendor without a real API
+key configured. A real implementation exists alongside this one
+(elevenlabs_provider.py); flip `tts.active` to `elevenlabs` (or set
+`TTS_PROVIDER=elevenlabs`) once `ELEVENLABS_API_KEY` is set.
 """
 
 from typing import Any

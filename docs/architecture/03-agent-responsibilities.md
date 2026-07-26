@@ -307,21 +307,25 @@ render plan) is real and tested end to end, including a real compositor
 (`libs/providers/editor/ffmpeg_provider.py`) and real thumbnail
 compositing — the whole pipeline has been verified to produce an actual
 playable MP4 and thumbnail image end to end (§3.4.6, §3.4's Thumbnail
-Generation section). `video_gen` also has a real, verified adapter —
-Runway ML (`libs/providers/video_gen/runway_provider.py`) — alongside
-its stub, proven end to end with a mocked HTTP layer standing in for
-Runway's servers: authentication, request creation, polling, downloading
-the finished clip, and Runway-specific error handling/retries all live
-inside that one file, with `video_gen.active` staying `stub` until a
-real `RUNWAY_API_KEY` is configured. What remains stub is `image_gen`/
-`tts`/`stock_media`/`audio_library`'s real *vendor* integrations
-(currently all `stub` in `config/providers.yaml`), plus `video_gen`'s
-InVideo AI and Google Veo alternatives — both honest stubs rather than
-fabricated integrations, since neither has a verifiable public API
-contract this codebase could implement against (see
-`invideo_provider.py`/`veo_provider.py`). Swapping any of these in
-exercises the same module code already verified against fake providers;
-nothing about the pipeline itself needs to change.
+Generation section). `video_gen` and `tts` also each have a real,
+verified adapter alongside their stub — Runway ML
+(`libs/providers/video_gen/runway_provider.py`) and ElevenLabs
+(`libs/providers/tts/elevenlabs_provider.py`) — both proven end to end
+with a mocked HTTP layer standing in for the vendor's servers:
+authentication, request creation, ElevenLabs' single synchronous call
+(no polling needed, unlike Runway's async task) or Runway's
+create/poll/download flow, and vendor-specific error/retry handling all
+live inside that one file each, with both capabilities staying `stub`
+until a real `RUNWAY_API_KEY`/`ELEVENLABS_API_KEY` is configured. What
+remains stub is `image_gen`/`stock_media`/`audio_library`'s real
+*vendor* integrations (currently all `stub` in
+`config/providers.yaml`), plus `video_gen`'s InVideo AI/Google Veo and
+`tts`'s Azure Speech alternatives — all honest stubs rather than
+fabricated integrations, since none has a verifiable public API
+contract this codebase could implement against (see each module's own
+docstring). Swapping any of these in exercises the same module code
+already verified against fake providers; nothing about the pipeline
+itself needs to change.
 
 **Asset Cache.** Sitting directly in front of both provider-calling
 modules' leaf calls is `services/agent_video/app/asset_cache.py`'s
@@ -407,15 +411,21 @@ valid regardless of whether its own index row won that race.
   Planning/Asset Generation; narration has no dependency on which visual
   assets a segment resolves to.
 - **Does:** first checks the Asset Cache for an identical prior request
-  (same text/provider); on a hit, reconstructs duration/word timings from
+  (same text, plus whatever settings the provider itself reports as
+  output-affecting via `TTSProvider.cache_key_settings()` — e.g.
+  ElevenLabs' configured voice/model — so a config change to the default
+  voice never wrongly reuses audio generated under a different one); on
+  a hit, reconstructs duration/word timings/model/voice id/language from
   the cache entry's metadata instead of resynthesizing. On a miss, sends
   the segment's text to the configured TTS provider
-  (`libs.providers.get_provider("tts")`) and caches the audio plus its
-  duration/timing. Either way, persists the audio as an `assets` row plus
-  a `voiceovers` row. This is the *only* module that calls `tts` —
-  swapping ElevenLabs for Azure Speech touches nothing else in this
-  pipeline, since every other module only ever sees the duration/timing
-  this module resolved, never the vendor.
+  (`libs.providers.get_provider("tts")`) and caches the audio plus that
+  same metadata bundle. Either way, persists the full bundle — provider,
+  model, voice id, language, duration, word timings — onto `voiceovers`
+  and mirrored into the `assets` row's `metadata` (§4.2), not just
+  transiently for cache reuse. This is the *only* module that calls
+  `tts` — swapping ElevenLabs for Azure Speech touches nothing else in
+  this pipeline, since every other module only ever sees the
+  duration/timing this module resolved, never the vendor.
 - **Output:** a list of voice segments — an asset id, a storage path, a
   duration, and (when the provider supports it) per-word timing. Falls
   back to the Script Agent's own `estimated_speech_wpm` pacing estimate

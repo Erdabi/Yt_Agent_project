@@ -35,15 +35,16 @@ vendor integration. Adding a real provider is: write the class, register
 it in the YAML under that capability, flip `active:` to its name (or set
 the `{CAPABILITY}_PROVIDER` environment variable, e.g.
 `VIDEO_GEN_PROVIDER=runway`, to override `active:` per-environment
-without editing the file at all — `libs/providers/registry.py`). Two
+without editing the file at all — `libs/providers/registry.py`). Three
 capabilities already have a real implementation alongside their stub:
-`video_gen` (Runway, requiring a real API key to actually use) and
-`editor` (ffmpeg, requiring none) — see the table below.
+`video_gen` (Runway), `tts` (ElevenLabs) — both requiring a real API key
+to actually use — and `editor` (ffmpeg, requiring none) — see the table
+below.
 
 | Capability | Primary choice | Fallback | Notes |
 |---|---|---|---|
 | LLM (ideation, scripting, QA policy review) | Anthropic Claude API | OpenAI GPT | Used for scoring, script generation, fact-checking, and policy review — all through one `LLMProvider` interface so prompt logic is provider-agnostic. |
-| Text-to-speech | ElevenLabs | Azure Speech / OpenAI TTS | Selected per-voice in `provider_configs.config`; word-level timestamps (when supported) drive caption sync. |
+| Text-to-speech | ElevenLabs | Azure Speech | ElevenLabs (`libs/providers/tts/elevenlabs_provider.py`) is a real, working adapter against ElevenLabs' public "create speech with timing" endpoint (auth, request creation, retryable-vs-permanent error handling — 429/5xx retried with backoff, 4xx fails fast — all internal to that one file); `tts.active` stays `stub` until a real `ELEVENLABS_API_KEY` is configured. It converts ElevenLabs' per-*character* alignment into the per-*word* timing `SynthesisResult` promises, which drives caption sync when available — Subtitle Generation falls back to an even split of the segment's known duration otherwise. Azure Speech (`azure_speech_provider.py`) is an honest stub rather than a fabricated integration: its REST API needs a resource-specific OAuth token exchange this codebase has no real Azure resource to verify against. |
 | Image generation (thumbnails, static visuals) | Stability AI | OpenAI (DALL-E) | |
 | Video generation (AI b-roll) | Runway ML | InVideo AI, Google Veo | Runway (`libs/providers/video_gen/runway_provider.py`) is a real, working adapter against Runway's public developer API (auth, request creation, polling, download, and Runway-specific error handling — all internal to that one file); `video_gen.active` stays `stub` until a real `RUNWAY_API_KEY` is configured, so nothing calls a paid vendor by default. InVideo AI and Google Veo (`invideo_provider.py`/`veo_provider.py`) are honest stubs rather than fabricated integrations: InVideo publishes no verifiable public REST API contract as of this writing, and Veo needs Vertex AI OAuth service-account credentials this codebase has no way to test against — both raise a clear error explaining exactly what's missing, the same as every other unimplemented vendor in this table. MVP still relies primarily on stock footage to control cost and latency; see [Roadmap](./06-roadmap.md). |
 | Stock footage/images (`stock_media`) | Pexels API | Pixabay API | Used by the Video Agent's Asset Generation module as the default visual source before AI generation — see [Agent Responsibilities §3.4](./03-agent-responsibilities.md#34-video-agent). |

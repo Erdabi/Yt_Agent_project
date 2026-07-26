@@ -13,7 +13,13 @@ This is the *only* module that calls `libs.providers.get_provider("tts")`
 — swapping ElevenLabs for Azure Speech in config/providers.yaml touches
 nothing else in this pipeline. Every other module only ever sees the
 `VoiceSegment` this one returns (an asset id, a storage path, a duration,
-optional word timings) — never which vendor produced it.
+optional word timings) — never which vendor produced it. The full
+provider/model/voice id/language bundle each provider reports back
+(`libs.providers.tts.base.SynthesisResult`) is persisted on `Voiceover`
+and mirrored into `Asset.metadata_` (alongside the word timings
+themselves) regardless of whether this segment was a cache hit or miss,
+so it's durably queryable per project — not just cached transiently for
+reuse.
 """
 
 from uuid import UUID
@@ -55,6 +61,11 @@ class VoiceGenerationModule:
             provider_name=provider_name,
             asset_type=_TTS_ASSET_TYPE,
             prompt=segment.text,
+            # Settings the provider itself reports as output-affecting
+            # (e.g. a configured voice_id/model) — folded in generically
+            # so a config change doesn't wrongly reuse audio generated
+            # under a different voice/model (see TTSProvider.cache_key_settings).
+            settings=self._provider.cache_key_settings(),
         )
 
         cached = self._cache.get(cache_key)
@@ -63,6 +74,9 @@ class VoiceGenerationModule:
             provider_name = cached.provider_name
             duration_sec = cached.metadata["duration_sec"]
             word_timings = _word_timings_from_metadata(cached.metadata["word_timings"])
+            model = cached.metadata.get("model")
+            voice_id = cached.metadata.get("voice_id")
+            language = cached.metadata.get("language")
         else:
             result = self._provider.synthesize(segment.text)
 
@@ -80,6 +94,9 @@ class VoiceGenerationModule:
                 duration_sec = (word_count / segment.production.estimated_speech_wpm) * 60
 
             word_timings = result.word_timings
+            model = result.model
+            voice_id = result.voice_id
+            language = result.language
             storage_path = self._cache.put(
                 cache_key,
                 data=result.audio_bytes,
@@ -89,6 +106,9 @@ class VoiceGenerationModule:
                 metadata={
                     "duration_sec": duration_sec,
                     "word_timings": _word_timings_to_metadata(word_timings),
+                    "model": model,
+                    "voice_id": voice_id,
+                    "language": language,
                 },
             )
 
@@ -99,7 +119,13 @@ class VoiceGenerationModule:
                 provider=provider_name,
                 storage_path=storage_path,
                 duration_sec=duration_sec,
-                metadata_={"segment_id": segment.segment_id},
+                metadata_={
+                    "segment_id": segment.segment_id,
+                    "model": model,
+                    "voice_id": voice_id,
+                    "language": language,
+                    "word_timings": _word_timings_to_metadata(word_timings),
+                },
             )
             session.add(asset)
             session.flush()
@@ -110,6 +136,9 @@ class VoiceGenerationModule:
                     script_segment_id=UUID(segment.segment_id),
                     asset_id=asset.id,
                     provider=provider_name,
+                    voice_id=voice_id,
+                    model=model,
+                    language=language,
                     duration_sec=duration_sec,
                 )
             )
