@@ -10,11 +10,11 @@ template: |
   palette explicitly.
 metadata:
   description: >
-    Draft prompt for the Video Agent's thumbnail module
-    (docs/architecture/03-agent-responsibilities.md §3.4.4). Not wired
-    into real code yet — ThumbnailModule.generate() still raises
-    NotImplementedError (docs/architecture/06-roadmap.md, Phase 1). Ready
-    to load via get_prompt_loader().get("video", "thumbnail_prompt") once
-    it is.
+    Prompt for the Video Agent's Thumbnail Generation module
+    (docs/architecture/03-agent-responsibilities.md §3.4,
+    services/agent_video/app/modules/thumbnail.py). Loaded via
+    get_prompt_loader().get("video", "thumbnail_prompt") and rendered
+    into an image-gen prompt before checking the Asset Cache and calling
+    get_provider("image_gen").
   owner: video-agent
   variables: [video_title, style_guide_summary, emphasis_words]

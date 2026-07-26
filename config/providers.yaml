@@ -17,6 +17,14 @@
 # real provider is: write the class under libs/providers/<capability>/,
 # add an entry for it here, and flip "active" — see the commented example
 # under each capability below.
+#
+# One exception: `editor` (video compositing). Unlike the creative/paid
+# vendors above, a compositor needs no vendor account — ffmpeg is a free
+# local binary — so its "active" provider is the real, working
+# libs.providers.editor.ffmpeg_provider.FFmpegEditorProvider from day
+# one, not a stub. `editor` also isn't in libs.models.enums.ProviderCapability
+# (no per-channel DB-driven override) — same as `youtube` below, which
+# isn't either.
 
 video_gen:
   active: stub
@@ -108,3 +116,23 @@ audio_library:
   #     config: {}
   #     secret_ref: FREESOUND_API_KEY
   # and set active: freesound.
+
+editor:
+  active: ffmpeg
+  providers:
+    ffmpeg:
+      class: libs.providers.editor.ffmpeg_provider.FFmpegEditorProvider
+      config:
+        fps: 30
+        font_path: /usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf
+        crossfade_sec: 0.5
+        audio_bitrate: 128k
+    stub:
+      class: libs.providers.editor.stub_provider.StubEditorProvider
+      config: {}
+  # No secret_ref: ffmpeg needs no API key. A future alternative
+  # compositor (e.g. a Remotion-based service, docs/architecture/
+  # 05-technology-choices.md §5.2) would slot in the same way every other
+  # capability's real provider does — a new class + entry here, "active"
+  # flipped, nothing in services/agent_video/app/modules/rendering.py
+  # touched.

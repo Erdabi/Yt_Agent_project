@@ -12,13 +12,18 @@ Plus Thumbnail Generation, which runs alongside but has no place in that
 dependency chain (see modules/thumbnail.py). Each module has one clearly
 typed input and one clearly typed output (services/agent_video/app/
 pipeline_schema.py) — no module reaches into another's internals, and
-only two modules (Asset Generation, Voice Generation) ever call
-`libs.providers.get_provider(...)` at all. That is what makes a provider
+each module calls at most the one `libs.providers` capability it
+genuinely needs: Asset Generation calls `image_gen`/`video_gen`/
+`stock_media`/`audio_library`, Voice Generation calls `tts`, and
+Rendering calls `editor` (its compositor). That is what makes a provider
 swappable independently: changing which class backs `tts` in
 config/providers.yaml only touches Voice Generation's own call site,
-because Timeline Building and Rendering never see a provider, only the
+because Timeline Building never sees a provider at all, only the
 `VoiceSegment`/`ResolvedAsset` values Voice Generation/Asset Generation
-already resolved.
+already resolved. Thumbnail Generation also calls `image_gen` on its own
+(see modules/thumbnail.py) — independent of Asset Generation's own use
+of the same capability, since a thumbnail's image has nothing to do with
+any one storyboard shot.
 
 The real dependency chain is: Asset Generation needs Asset Planning's
 plan; Subtitle Generation needs Voice Generation's durations/timing;

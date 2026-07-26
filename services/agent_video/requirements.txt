@@ -1,9 +1,15 @@
 -r ../../requirements/base.txt
 
-# No real-vendor-specific dependencies yet. Each module will add its own
-# when a real provider lands behind it (docs/architecture/06-roadmap.md):
-# asset_generation.py (stock-media/image-gen/video-gen/audio-library client
-# libraries), voice_generation.py (TTS provider SDK), rendering.py
-# (ffmpeg-python/moviepy, plus the `ffmpeg` binary itself), thumbnail.py
-# (image-gen client library) — until then this image only needs the shared
-# base requirements.
+# rendering.py's compositor (libs/providers/editor/ffmpeg_provider.py)
+# shells out to the `ffmpeg`/`ffprobe` binaries directly via subprocess —
+# no Python wrapper library needed, and no vendor SDK either, since ffmpeg
+# is a free local binary (installed in the Dockerfile, not here).
+#
+# thumbnail.py composites its generated title text onto the base image
+# locally rather than through any provider.
+Pillow==12.3.0
+
+# Still stub implementations, waiting on real vendor integrations
+# (docs/architecture/06-roadmap.md): asset_generation.py (stock-media/
+# image-gen/video-gen/audio-library client libraries), voice_generation.py
+# (TTS provider SDK).

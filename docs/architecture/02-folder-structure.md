@@ -75,8 +75,8 @@ yt-agent/
 │   │           ├── voice_generation.py    # checks AssetCache, else calls tts, persists Asset+Voiceover
 │   │           ├── subtitle_generation.py # caption cues from real or estimated word timing — no provider calls
 │   │           ├── timeline_building.py   # cumulative absolute timing + final assembly — no provider calls
-│   │           ├── rendering.py           # builds a render plan; compositor invocation is a stub (no ffmpeg yet)
-│   │           └── thumbnail.py           # text_overlay + style_guide logic lives here (ancillary, not in the 6-stage chain)
+│   │           ├── rendering.py           # builds a render plan, then calls the editor provider to composite it
+│   │           └── thumbnail.py           # checks AssetCache, else calls image_gen; composites title with Pillow (ancillary, not in the 6-stage chain)
 │   │
 │   ├── agent_qa/
 │   │   └── app/{worker.py, technical_checks.py, policy_review.py}
@@ -110,6 +110,7 @@ yt-agent/
 │   │   ├── image_gen/{base.py, stub_provider.py}
 │   │   ├── stock_media/{base.py, stub_provider.py}    # StockMediaProvider.search() — stock footage/photos
 │   │   ├── audio_library/{base.py, stub_provider.py}  # AudioLibraryProvider.search() — sound effects/music cues
+│   │   ├── editor/{base.py, stub_provider.py, ffmpeg_provider.py}  # compositor — ffmpeg_provider.py is real, not a stub (no vendor account needed)
 │   │   └── youtube/{base.py, stub_provider.py}
 │   │
 │   ├── storage/                      # centralized asset storage, keyed by project id

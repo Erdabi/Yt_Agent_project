@@ -197,8 +197,10 @@ Thin join tables linking a stage's output to an `assets` row plus
 stage-specific metadata (voice id/provider for `voiceovers`; render engine and
 final duration for `renders`; `is_selected` flag and A/B variant label for
 `thumbnails`). `voiceovers` is written by the Video Agent's Voice Generation
-module; `renders` by its Rendering module, once a real compositor exists (see
-§3.4 — building the render plan is real today, invoking one is not).
+module; `renders` by its Rendering module, via the `editor` capability's real
+ffmpeg-based compositor (§3.4); `thumbnails` by its Thumbnail Generation
+module — one variant per project today (`is_selected` always true), automated
+A/B variant testing being a later phase (§6, Phase 4).
 
 ### `asset_cache_entries`
 The Video Agent's Asset Cache index (`services/agent_video/app/asset_cache.py`,

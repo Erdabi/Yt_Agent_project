@@ -271,13 +271,17 @@ The Manager dispatches and retries this stage as one unit; it never sees
 or retries an individual module. Each module has one clearly typed input
 and one clearly typed output
 (services/agent_video/app/pipeline_schema.py) — no module reaches into
-another's internals, and only two modules (Asset Generation, Voice
-Generation) ever call `libs.providers.get_provider(...)` at all. That is
+another's internals, and each module calls at most the one
+`libs.providers` capability it genuinely needs: Asset Generation calls
+`image_gen`/`video_gen`/`stock_media`/`audio_library`, Voice Generation
+calls `tts`, Rendering calls `editor` (its compositor), and Thumbnail
+Generation (which runs alongside the six, not part of the chain) calls
+`image_gen` independently of Asset Generation's own use of it. That is
 what makes a provider swappable independently: changing which class
 backs `tts` in `config/providers.yaml` only touches Voice Generation's
-own call site, because Timeline Building and Rendering never see a
-provider, only the `VoiceSegment`/`ResolvedAsset` values Voice
-Generation/Asset Generation already resolved.
+own call site, because Timeline Building never sees a provider at all,
+only the `VoiceSegment`/`ResolvedAsset` values Voice Generation/Asset
+Generation already resolved.
 
 The real dependency chain: Asset Generation needs Asset Planning's plan;
 Subtitle Generation needs Voice Generation's durations/timing; Timeline
@@ -294,17 +298,20 @@ video job is retried by the Manager, including every already-succeeded
 module's work — acceptable because most of these modules are fast/cheap
 relative to Rendering, and a partial-video retry was never really "resume
 where it broke" anyway, since Timeline Building's output depends on all
-of them regardless.
+of them regardless; the Asset Cache (below) means a retry's Asset
+Generation/Voice Generation/Thumbnail Generation work is often close to
+free the second time anyway.
 
 Module logic itself (deciding what's needed, computing timing, building a
-render plan) is real and tested end to end. Only the true external
-dependencies each module's own leaf call needs remain honest
-`NotImplementedError`s — a real TTS/image-gen/video-gen/stock-media/
-audio-library vendor (all currently `stub` in `config/providers.yaml`)
-and a real compositor (ffmpeg is not installed in the Video Agent's image
-yet). Swapping in real providers exercises the same module code already
-verified against fake ones — nothing about the pipeline itself needs to
-change.
+render plan) is real and tested end to end, including a real compositor
+(`libs/providers/editor/ffmpeg_provider.py`) and real thumbnail
+compositing — the whole pipeline has been verified to produce an actual
+playable MP4 and thumbnail image end to end (§3.4.6, §3.4's Thumbnail
+Generation section). What remains stub is `image_gen`/`video_gen`/
+`tts`/`stock_media`/`audio_library`'s real *vendor* integrations
+(currently all `stub` in `config/providers.yaml`) — swapping one in
+exercises the same module code already verified against fake providers;
+nothing about the pipeline itself needs to change.
 
 **Asset Cache.** Sitting directly in front of both provider-calling
 modules' leaf calls is `services/agent_video/app/asset_cache.py`'s
@@ -455,23 +462,36 @@ valid regardless of whether its own index row won that race.
   caption style) read from `Channel.persona_config`.
 - **Does:** builds a render plan from the Timeline — resolving each
   entry's visuals, layering voice-over/supplementary audio/captions,
-  applying transitions — then invokes a compositor on it. Never imports
-  `libs.providers` at all: every asset it needs was already resolved by
-  Asset Generation/Voice Generation, so it has nothing to swap and
-  nothing to know about which vendor produced any of it. Building the
-  plan is real, tested logic; actually invoking ffmpeg is not — ffmpeg
-  is deliberately not installed in this image yet (see
-  services/agent_video/requirements.txt), so that one leaf call stays an
-  honest `NotImplementedError` until it is, the primary CPU/time-
-  intensive step and driver of VPS sizing once it lands.
+  applying transitions — then hands that plan to
+  `libs.providers.get_provider("editor")`, the *only* capability this
+  module calls (see `libs/providers/editor/base.py`'s `EditSpec`). It
+  reads every asset's bytes back via `libs.storage` right before handing
+  them to the provider (plan-building itself stays storage-free, like
+  every other module's own plan/output types), and writes the provider's
+  returned video bytes back through the same abstraction. Swapping the
+  compositor is a `config/providers.yaml` change, same as any other
+  capability — Rendering itself knows nothing about ffmpeg specifically.
+- **Compositor:** unlike every other capability in this pipeline, a
+  compositor needs no paid vendor account — ffmpeg is a free local
+  binary — so `editor`'s "active" provider
+  (`libs/providers/editor/ffmpeg_provider.py`) is a real, working
+  implementation from day one, not a stub. It normalizes every visual
+  clip (image or video) to the target resolution/frame rate and the
+  exact duration its segment needs, mixes narration with any
+  supplementary audio per segment, applies a plain fade for any
+  non-"cut" transition between segments (distinct wipe/slide/zoom/
+  dissolve filtergraphs per `TransitionType` are a documented future
+  enhancement, not implemented), concatenates every segment plus an
+  optional intro/outro, and burns in every subtitle cue (emphasized cues
+  in a highlight color) in one final pass over the assembled video.
 - **Output:** the final rendered video `assets` row (resolution,
   duration) referenced by a `renders` row.
-- **Failure mode:** a compositor crash (or, today, its absence) fails
-  the whole Video Agent job, which the Manager retries from the start —
-  renders are not resumable, and neither is the module sequence; a
-  render exceeding a configured max duration should be killed and
-  flagged rather than left running indefinitely, once real rendering
-  exists.
+- **Failure mode:** a compositor crash fails the whole Video Agent job,
+  which the Manager retries from the start — renders are not resumable,
+  and neither is the module sequence. A missing (but optional) intro/
+  outro branding asset is not treated as a failure: it's logged and
+  skipped, since an accessory clip going missing shouldn't abort an
+  otherwise-successful video.
 
 ### Thumbnail Generation module
 
@@ -481,19 +501,24 @@ it, since it only needs the approved script/title and the channel's
 style guide, not anything Rendering produces. Runs after it anyway to
 keep `VideoAgent.run()` one simple sequence.
 
-- **Input:** approved script/title, channel style guide (colors, fonts,
-  logo placement).
-- **Does:** generates 2–4 thumbnail candidates via the image-gen
-  provider (`libs.providers.get_provider("image_gen")`), composites
-  title text/emphasis per the style guide, tags each as a variant for
-  later A/B testing.
-- **Output:** `thumbnails` rows linked to `assets`, one marked
-  `is_selected`.
-- **Failure mode:** falls back to a template-only thumbnail (no AI
-  image, text over a branded background) if the image-gen provider
-  fails.
-- **Prompt:** `prompts/video/thumbnail_prompt/` (draft — not wired into
-  real code yet, see §6 Phase 1).
+- **Input:** the project's video title (`VideoIdea.title`), the
+  channel's style guide summary (`Channel.persona_config`), and the
+  hook segment's emphasis words.
+- **Does:** renders `prompts/video/thumbnail_prompt/` into an image-gen
+  prompt, checks the Asset Cache, and on a miss calls
+  `libs.providers.get_provider("image_gen")` for the base image — the
+  *only* capability this module calls, independent of Asset Generation's
+  own use of the same capability for storyboard shots. Composites the
+  video's title onto that image locally with Pillow (not a provider
+  capability, the same way Rendering's ffmpeg compositing isn't one
+  either).
+- **Output:** one `thumbnails` row linked to an `assets` row, marked
+  `is_selected`. Only one variant is produced today — automated
+  thumbnail/title A/B variant testing is Phase 4 (§6).
+- **Failure mode:** an image-gen provider failure fails the job
+  honestly, same as every other provider call in this pipeline — no
+  template-only fallback.
+- **Prompt:** `prompts/video/thumbnail_prompt/`.
 
 ## 3.8 Quality Assurance Agent
 

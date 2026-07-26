@@ -11,6 +11,14 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+# ffmpeg/ffprobe back the Rendering module's real compositor
+# (libs/providers/editor/ffmpeg_provider.py); fonts-dejavu-core supplies
+# the font its drawtext filter (captions, on-screen text, thumbnail
+# overlay) renders with.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY requirements/base.txt requirements/base.txt
 COPY services/agent_video/requirements.txt services/agent_video/requirements.txt
 RUN pip install --no-cache-dir -r services/agent_video/requirements.txt

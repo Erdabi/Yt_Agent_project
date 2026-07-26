@@ -62,22 +62,28 @@ for a single developer, not commitments.
 - Video Agent's modules land one real implementation at a time, in-process
   (no separate agents/queues to coordinate — see
   [Agent Responsibilities §3.4](./03-agent-responsibilities.md#34-video-agent)).
-  **Pipeline structure done** — Asset Planning, Asset Generation, Voice
-  Generation, Subtitle Generation, Timeline Building, and Rendering are
-  six real, independently-testable modules with typed inputs/outputs
-  (services/agent_video/app/pipeline_schema.py), each calling
-  `libs.providers` (`image_gen`/`video_gen`/`stock_media`/
-  `audio_library`/`tts`) only where it genuinely needs to, so swapping
-  one capability's provider never touches another module's code — proven
-  by running the full pipeline against fake providers standing in for
-  each capability. What's still a real vendor integration away: every
-  capability above is still the `stub` implementation
-  (config/providers.yaml), and Rendering's compositor invocation itself
-  is a documented `NotImplementedError` (ffmpeg not installed yet) —
-  static images/stock footage + Ken Burns-style motion + burned-in
-  captions via ffmpeg is still the planned first real implementation, no
-  AI-generated visuals yet. Thumbnail Generation: template + text
-  overlay only (no AI image generation yet), not implemented.
+  **Done end to end** — Asset Planning, Asset Generation, Voice
+  Generation, Subtitle Generation, Timeline Building, Rendering, and
+  Thumbnail Generation are seven real, independently-testable modules
+  with typed inputs/outputs (services/agent_video/app/pipeline_schema.py),
+  each calling `libs.providers` (`image_gen`/`video_gen`/`stock_media`/
+  `audio_library`/`tts`/`editor`) only where it genuinely needs to, so
+  swapping one capability's provider never touches another module's code
+  — proven by running the full pipeline end to end against real
+  Postgres, producing an actual playable MP4 and thumbnail image, and
+  confirming the Asset Cache (below) makes a second, identical request
+  reuse prior output with zero new provider calls. What's still a real
+  *vendor* integration away: `image_gen`/`video_gen`/`stock_media`/
+  `audio_library`/`tts` are all still the `stub` implementation
+  (config/providers.yaml) — no AI-generated visuals or real narration
+  yet, MVP relies on whichever of those get wired to a real vendor first.
+  `editor` (video compositing) is the one exception: it needs no vendor
+  account at all, so its real ffmpeg-based provider
+  (`libs/providers/editor/ffmpeg_provider.py`) already composites
+  images/video clips + narration + supplementary audio + burned-in
+  captions into a final MP4 — Ken Burns-style motion and distinct
+  wipe/slide/zoom/dissolve transitions (today collapsed to a plain fade)
+  remain a documented future enhancement, not a blocker.
 - Publisher Agent: manual trigger, no auto-scheduling.
 - A human approval checkpoint at **every** stage transition (safest possible
   starting posture).
