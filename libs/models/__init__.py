@@ -5,6 +5,7 @@ after importing this package.
 """
 
 from libs.models.asset import Asset, Render, Thumbnail, Voiceover
+from libs.models.asset_cache import AssetCacheEntry
 from libs.models.base import Base
 from libs.models.channel import Channel
 from libs.models.idea import VideoIdea
@@ -31,6 +32,7 @@ __all__ = [
     "Voiceover",
     "Render",
     "Thumbnail",
+    "AssetCacheEntry",
     "QAReport",
     "Job",
     "Publication",

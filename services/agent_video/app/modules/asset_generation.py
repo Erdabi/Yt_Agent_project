@@ -1,9 +1,10 @@
 """Asset Generation module.
 
 Second stage of the Video Agent's pipeline (see video_agent.py): executes
-Asset Planning's plan by calling the configured provider for each
-provider-generated requirement, storing the result via `libs.storage`,
-and persisting `Asset`/`StoryboardShot` rows.
+Asset Planning's plan by checking the Asset Cache (../asset_cache.py) for
+each provider-generated requirement before calling the configured
+provider, storing a fresh result on a cache miss, and persisting
+`Asset`/`StoryboardShot` rows either way.
 
     Input:  list[PlannedAsset]
     Output: list[ResolvedAsset]
@@ -29,8 +30,8 @@ from libs.models.enums import AssetType as PhysicalAssetType
 from libs.models.storyboard import StoryboardShot
 from libs.providers.registry import get_provider
 from libs.schemas.script_production import AssetType as ScriptAssetType
-from libs.storage import get_storage_backend
 
+from ..asset_cache import AssetCache, AssetCacheKey
 from ..pipeline_schema import AssetResolutionKind, PlannedAsset, ResolvedAsset
 
 logger = get_logger(__name__)
@@ -56,7 +57,7 @@ _PHYSICAL_TYPE_AND_EXTENSION: dict[ScriptAssetType, tuple[PhysicalAssetType, str
 
 class AssetGenerationModule:
     def __init__(self) -> None:
-        self._storage = get_storage_backend()
+        self._cache = AssetCache()
         self._provider_cache: dict[str, Any] = {}
 
     def generate(self, project_id: str, planned_assets: list[PlannedAsset]) -> list[ResolvedAsset]:
@@ -94,12 +95,30 @@ class AssetGenerationModule:
 
         provider = self._get_cached_provider(planned.provider_capability)
         provider_name = type(provider).__name__
-        data = self._call_provider(provider, planned)
-
         physical_type, extension = _PHYSICAL_TYPE_AND_EXTENSION[planned.asset_type]
-        filename = f"{planned.segment_id}_{planned.requirement_index}.{extension}"
-        category = "audio_library" if planned.is_audio else "storyboard"
-        storage_path = self._storage.save_bytes(project_id, category, filename, data)
+
+        cache_key = AssetCacheKey(
+            capability=planned.provider_capability,
+            provider_name=provider_name,
+            asset_type=planned.asset_type.value,
+            prompt=planned.description,
+        )
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            storage_path = cached.storage_path
+            # Attribute to whichever provider actually produced these
+            # bytes, which may not be today's configured provider for
+            # this capability.
+            provider_name = cached.provider_name
+        else:
+            data = self._call_provider(provider, planned)
+            storage_path = self._cache.put(
+                cache_key,
+                data=data,
+                extension=extension,
+                physical_asset_type=physical_type,
+                provider_name=provider_name,
+            )
 
         with sync_session_scope() as session:
             asset = Asset(

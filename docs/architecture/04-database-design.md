@@ -200,6 +200,37 @@ final duration for `renders`; `is_selected` flag and A/B variant label for
 module; `renders` by its Rendering module, once a real compositor exists (see
 §3.4 — building the render plan is real today, invoking one is not).
 
+### `asset_cache_entries`
+The Video Agent's Asset Cache index (`services/agent_video/app/asset_cache.py`,
+§3.4) — deliberately **not** an `assets`-adjacent table: no foreign key to
+`projects` or `assets` at all, so it survives any one project's deletion and
+is shared across every project rather than scoped to one. `cache_key` is a
+SHA-256 hash of the semantic request (capability, provider, prompt,
+resolution/duration/style/language/settings) that produced `storage_path`;
+Asset Generation and Voice Generation look up this table before calling a
+provider, and every project that hits the same key reuses the same
+`storage_path` in its own `assets` row.
+
+| column | type | notes |
+|---|---|---|
+| id | uuid PK | |
+| cache_key | text(64), unique | hex SHA-256 digest of the canonical request payload |
+| capability | text | `image_gen`, `video_gen`, `stock_media`, `audio_library`, `tts` |
+| provider_name | text | which provider actually produced these bytes — not necessarily today's configured one for this capability |
+| asset_type | text | the requesting side's own asset-type vocabulary (a Script Agent `AssetType` value, or `narration` for TTS) |
+| physical_asset_type | enum | reuses `assets.type`'s `asset_type` enum (`audio`/`image`/`video`/`music`/`caption`) |
+| storage_path | text | object-storage key, under a dedicated cache namespace, never a real project's |
+| metadata | jsonb | capability-specific data a hit needs to avoid recalling the provider — e.g. TTS's `duration_sec`/`word_timings`; empty when the stored bytes are themselves the whole answer |
+| hit_count | int | incremented on every cache hit |
+| last_used_at | timestamptz | updated on every cache hit |
+| created_at | timestamptz | |
+
+Writing a new entry (`AssetCache.put`) tolerates losing a race to another
+worker caching the same key concurrently — the unique-constraint violation
+on `cache_key` is caught and logged rather than raised, since the caller's
+own freshly produced bytes are already valid to use regardless of which
+worker's index row wins.
+
 ### `qa_reports`
 | column | type | notes |
 |---|---|---|

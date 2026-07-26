@@ -67,10 +67,12 @@ yt-agent/
 │   │       ├── video_agent.py        # VideoAgent.run() calls the six modules below in sequence, + thumbnail
 │   │       ├── pipeline_schema.py     # typed input/output contracts shared by every module below,
 │   │       │                         # including ASSET_TYPE_ROUTING (script AssetType -> provider capability)
+│   │       ├── asset_cache.py         # AssetCache/AssetCacheKey: dedup layer in front of every provider call
+│   │       │                         # below — checks for an identical prior request before calling a provider
 │   │       └── modules/
 │   │           ├── asset_planning.py      # routes asset_requirements to capabilities — no provider calls
-│   │           ├── asset_generation.py    # calls image_gen/video_gen/stock_media/audio_library, persists Asset+StoryboardShot
-│   │           ├── voice_generation.py    # calls tts, persists Asset+Voiceover
+│   │           ├── asset_generation.py    # checks AssetCache, else calls image_gen/video_gen/stock_media/audio_library, persists Asset+StoryboardShot
+│   │           ├── voice_generation.py    # checks AssetCache, else calls tts, persists Asset+Voiceover
 │   │           ├── subtitle_generation.py # caption cues from real or estimated word timing — no provider calls
 │   │           ├── timeline_building.py   # cumulative absolute timing + final assembly — no provider calls
 │   │           ├── rendering.py           # builds a render plan; compositor invocation is a stub (no ffmpeg yet)

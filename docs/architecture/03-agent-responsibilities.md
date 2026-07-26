@@ -306,6 +306,36 @@ yet). Swapping in real providers exercises the same module code already
 verified against fake ones — nothing about the pipeline itself needs to
 change.
 
+**Asset Cache.** Sitting directly in front of both provider-calling
+modules' leaf calls is `services/agent_video/app/asset_cache.py`'s
+`AssetCache` — before Asset Generation or Voice Generation calls a
+provider, it checks this cache for an asset already produced from an
+identical semantic request, and reuses it instead of regenerating it.
+"Identical" is a SHA-256 hash of a canonical JSON payload
+(`AssetCacheKey`) covering everything that determines the output:
+`capability`, `provider_name`, `asset_type`, `prompt`, and whichever of
+`resolution`/`duration_sec`/`style`/`language`/`settings` apply — so a
+provider swap, or any change to the request itself, naturally produces a
+different hash rather than wrongly reusing another vendor's or another
+request's output. The cache mechanism itself stays generic (no
+per-provider branching lives in `asset_cache.py`); `capability` and
+`provider_name` are just data fields on the key.
+
+The cache is deliberately global, not scoped to one project — indexed by
+its own `asset_cache_entries` table (`libs/models/asset_cache.py`, no
+foreign key to `projects` or `assets`), with cached bytes stored under
+their own non-project storage namespace. Two different projects
+requesting the same prompt/provider/settings combination share the same
+stored bytes; each still gets its own `assets`/`storyboard_shots`/
+`voiceovers` rows on every request, cache hit or miss — only the
+underlying `storage_path` is shared. A cache hit for TTS also carries
+`duration_sec`/`word_timings` in the entry's `metadata` column, so Voice
+Generation can rebuild a complete result without resynthesizing. Writing
+a new entry tolerates losing a race to another worker caching the same
+key concurrently (the `cache_key` unique-constraint violation is caught
+and logged, not raised) — the caller's own freshly produced bytes remain
+valid regardless of whether its own index row won that race.
+
 ### 3.4.1 Asset Planning module
 
 - **Input:** `script_segments`, specifically each segment's
@@ -335,12 +365,14 @@ change.
 ### 3.4.2 Asset Generation module
 
 - **Input:** Asset Planning's output.
-- **Does:** for every provider-generated requirement, calls the
-  configured provider for that capability
+- **Does:** for every provider-generated requirement, first checks the
+  Asset Cache (see above) for an identical prior request; on a hit,
+  reuses its `storage_path` and skips the provider call entirely. On a
+  miss, calls the configured provider for that capability
   (`libs.providers.get_provider("image_gen"/"video_gen"/"stock_media"/
-  "audio_library")`), stores the result via `libs.storage`, and persists
-  an `assets` row plus (for visual requirements) a `storyboard_shots`
-  row. This is the *only* module that calls those four capabilities —
+  "audio_library")`) and caches the result. Either way, persists an
+  `assets` row plus (for visual requirements) a `storyboard_shots` row.
+  This is the *only* module that calls those four capabilities —
   Asset Planning already decided *which* one each requirement needs, so
   swapping the concrete class behind any of them is a
   `config/providers.yaml` change that touches nothing else in this
@@ -357,12 +389,16 @@ change.
 - **Input:** `script_segments` — runs independently of Asset
   Planning/Asset Generation; narration has no dependency on which visual
   assets a segment resolves to.
-- **Does:** sends each segment's text to the configured TTS provider
-  (`libs.providers.get_provider("tts")`), persists the audio as an
-  `assets` row plus a `voiceovers` row. This is the *only* module that
-  calls `tts` — swapping ElevenLabs for Azure Speech touches nothing
-  else in this pipeline, since every other module only ever sees the
-  duration/timing this module resolved, never the vendor.
+- **Does:** first checks the Asset Cache for an identical prior request
+  (same text/provider); on a hit, reconstructs duration/word timings from
+  the cache entry's metadata instead of resynthesizing. On a miss, sends
+  the segment's text to the configured TTS provider
+  (`libs.providers.get_provider("tts")`) and caches the audio plus its
+  duration/timing. Either way, persists the audio as an `assets` row plus
+  a `voiceovers` row. This is the *only* module that calls `tts` —
+  swapping ElevenLabs for Azure Speech touches nothing else in this
+  pipeline, since every other module only ever sees the duration/timing
+  this module resolved, never the vendor.
 - **Output:** a list of voice segments — an asset id, a storage path, a
   duration, and (when the provider supports it) per-word timing. Falls
   back to the Script Agent's own `estimated_speech_wpm` pacing estimate
