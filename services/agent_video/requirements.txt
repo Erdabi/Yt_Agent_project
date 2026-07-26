@@ -1,8 +1,9 @@
 -r ../../requirements/base.txt
 
-# No agent-specific dependencies yet. Each module below will add its own
-# real dependency when its actual logic lands (docs/architecture/06-roadmap.md):
-# storyboard.py (stock-media/image-gen client libraries), voiceover.py (TTS
-# provider SDK), assembly.py (ffmpeg-python/moviepy), thumbnail.py
+# No real-vendor-specific dependencies yet. Each module will add its own
+# when a real provider lands behind it (docs/architecture/06-roadmap.md):
+# asset_generation.py (stock-media/image-gen/video-gen/audio-library client
+# libraries), voice_generation.py (TTS provider SDK), rendering.py
+# (ffmpeg-python/moviepy, plus the `ffmpeg` binary itself), thumbnail.py
 # (image-gen client library) — until then this image only needs the shared
 # base requirements.

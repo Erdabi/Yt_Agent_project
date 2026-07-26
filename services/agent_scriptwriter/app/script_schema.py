@@ -7,115 +7,33 @@ Every segment carries, in addition to narration and visuals, structured
 production metadata the Video Agent (services/agent_video) can consume
 directly — camera framing, transition, pacing, narration emotion,
 emphasis words, estimated speech speed, and a structured list of asset
-requirements — without parsing free text out of a notes column.
+requirements — without parsing free text out of a notes column. That
+metadata's shape (`SegmentProductionMetadata` and friends) lives in
+`libs/schemas/script_production.py`, not here, since the Video Agent — a
+different service — needs it too, and services only share code through
+`libs/`, never each other's `app/` packages.
 
-`asset_requirements` (`AssetRequirement`, below) is deliberately
+`asset_requirements` (`AssetRequirement`) is deliberately
 *provider-independent*: it declares what kind of asset a beat needs (an
 AI-generated video, a stock clip, a diagram, a sound effect, ...) and
 what it should contain, never which concrete provider or tool should
 supply it — the same separation `libs.providers` already enforces for
 capability selection (an agent asks for "the active TTS provider", never
 a vendor by name). Resolving a requirement into a concrete asset is the
-Video Agent's job, once its Storyboard/Voice-over/Assembly modules land.
+Video Agent's job (its Asset Planning/Asset Generation modules).
 """
 
-import enum
 from dataclasses import dataclass
 
-from pydantic import BaseModel, ConfigDict, Field
-
 from libs.schemas.knowledge import KnowledgePackage
-
-
-class TransitionType(str, enum.Enum):
-    CUT = "cut"
-    FADE = "fade"
-    DISSOLVE = "dissolve"
-    WIPE = "wipe"
-    ZOOM = "zoom"
-    SLIDE = "slide"
-    MATCH_CUT = "match_cut"
-
-
-class Pacing(str, enum.Enum):
-    """Editing rhythm / cut frequency for a beat — independent of
-    narration delivery speed (`SegmentProductionMetadata.estimated_speech_wpm`
-    below): a beat can be spoken slowly over fast-cutting visuals, or
-    vice versa.
-    """
-
-    FAST = "fast"
-    MEDIUM = "medium"
-    SLOW = "slow"
-
-
-class AssetType(str, enum.Enum):
-    """What kind of production asset a beat needs — the full vocabulary a
-    script can draw from, independent of any specific provider. Distinct
-    from `libs.models.enums.ShotType` (used by `StoryboardShot.shot_type`
-    once the Storyboard module resolves a *visual* requirement into one
-    concrete shot): this is the broader, upstream "what's needed" the
-    Script Agent declares, covering audio as well as several visual
-    treatments `ShotType` doesn't distinguish. Translating a visual
-    `AssetType` down to a `ShotType` is that future module's job, not
-    this one's.
-    """
-
-    AI_VIDEO = "ai_video"
-    AI_IMAGE = "ai_image"
-    STOCK_FOOTAGE = "stock_footage"
-    ANIMATION = "animation"
-    DIAGRAM = "diagram"
-    MAP = "map"
-    PORTRAIT = "portrait"
-    TEXT_OVERLAY = "text_overlay"
-    SUBTITLE_EMPHASIS = "subtitle_emphasis"
-    SOUND_EFFECT = "sound_effect"
-    BACKGROUND_MUSIC_CUE = "background_music_cue"
-
-
-#: Every `AssetType` that produces something visible on screen — i.e.
-#: every one of them except the two purely audio types. Used to validate
-#: that a beat's described visual actually has something declared to
-#: realize it (see `_validate_asset_coverage` below).
-_VISUAL_ASSET_TYPES = frozenset(AssetType) - {AssetType.SOUND_EFFECT, AssetType.BACKGROUND_MUSIC_CUE}
-
-
-class AssetRequirement(BaseModel):
-    """One concrete production need for a beat. `description` is content
-    — what it should actually show or sound like (e.g. "close-up of a
-    chisel bevel at a 25-degree angle", "a soft ambient workshop drone")
-    — never a provider, tool, or model name; which one fulfills it is a
-    decision for whatever satisfies this requirement later, not this
-    agent's to make.
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-    asset_type: AssetType
-    description: str
-
-
-class SegmentProductionMetadata(BaseModel):
-    """Everything the Video Agent needs to turn one script beat into
-    concrete assets, without additional parsing.
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-    camera_framing: str
-    #: Every production asset this beat needs — a beat can require more
-    #: than one at once (e.g. a stock clip AND a sound effect AND a text
-    #: overlay). At least one must be a visual type
-    #: (`_VISUAL_ASSET_TYPES`) covering what `scene_description`/
-    #: `visual_suggestions` describes — enforced by
-    #: `_validate_asset_coverage`, not just prompted for.
-    asset_requirements: list[AssetRequirement] = Field(default_factory=list)
-    transition_type: TransitionType
-    pacing: Pacing
-    narration_emotion: str
-    emphasis_words: list[str] = Field(default_factory=list)
-    estimated_speech_wpm: int
+from libs.schemas.script_production import (
+    VISUAL_ASSET_TYPES,
+    AssetRequirement,
+    AssetType,
+    Pacing,
+    SegmentProductionMetadata,
+    TransitionType,
+)
 
 
 @dataclass(frozen=True)
@@ -382,7 +300,7 @@ def _section_from_dict(data: dict) -> ScriptSection:
 
 
 def _beat_covers_visual(beat: ScriptBeat) -> bool:
-    return any(req.asset_type in _VISUAL_ASSET_TYPES for req in beat.production.asset_requirements)
+    return any(req.asset_type in VISUAL_ASSET_TYPES for req in beat.production.asset_requirements)
 
 
 def _validate_asset_coverage(script: GeneratedScript) -> None:

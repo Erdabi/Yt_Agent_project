@@ -7,11 +7,11 @@ vendor integration, which is deferred to Phase 1
 
 from typing import Any
 
-from .base import TTSProvider
+from .base import SynthesisResult, TTSProvider
 
 
 class StubTTSProvider(TTSProvider):
-    def synthesize(self, text: str, *, voice_id: str | None = None, **kwargs: Any) -> bytes:
+    def synthesize(self, text: str, *, voice_id: str | None = None, **kwargs: Any) -> SynthesisResult:
         raise NotImplementedError(
             "No real text-to-speech provider is configured. Add one under "
             "libs/providers/tts/, register it in config/providers.yaml, and "

@@ -259,78 +259,205 @@ research; the Research Agent (§3.2) already did that.
 
 ## 3.4 Video Agent
 
-One agent, one queue (`video`), one `ProjectStage` (`VIDEO_CREATION`) — but
-four internal modules run in sequence within a single job
-(services/agent_video/app/video_agent.py), covering what used to be four
-separate agents/stages. The Manager dispatches and retries this stage as
-one unit; it never sees or retries an individual module. That's a real
-trade-off, not just a simplification: assembly (§3.4.3) already depends
-on both storyboard's (§3.4.1) and voice-over's (§3.4.2) output, so a
-failure there means re-running all four from scratch rather than resuming
-mid-way — acceptable because storyboard and voice-over are cheap relative
-to assembly.
+One agent, one queue (`video`), one `ProjectStage` (`VIDEO_CREATION`) —
+but internally, video production is a pipeline of six modules, run in
+sequence within a single job (services/agent_video/app/video_agent.py),
+plus a seventh (Thumbnail Generation) that runs alongside it:
 
-### 3.4.1 Storyboard / Visual Planning module
+    Asset Planning -> Asset Generation -> Voice Generation
+        -> Subtitle Generation -> Timeline Building -> Rendering
 
-- **Input:** `script_segments`.
-- **Does:** decides, per segment, the visual treatment — stock footage search
-  query, AI image-gen prompt, AI video-gen prompt, or a text/motion-graphics
-  overlay — and resolves it to a concrete asset: either sourcing from a stock
-  provider or generating one (`libs.providers.get_provider("image_gen")` /
-  `"video_gen"`).
-- **Output:** `storyboard_shots` (shot list) referencing `assets` rows, in
-  script order.
-- **Failure mode:** if a preferred visual type is unavailable (e.g. no stock
-  match), it falls back to the next configured treatment (e.g. stock → AI
-  image) rather than failing the segment.
-- **Prompt:** `prompts/video/storyboard_shot_planning/` (draft — not wired
-  into real code yet, see §6 Phase 1).
+The Manager dispatches and retries this stage as one unit; it never sees
+or retries an individual module. Each module has one clearly typed input
+and one clearly typed output
+(services/agent_video/app/pipeline_schema.py) — no module reaches into
+another's internals, and only two modules (Asset Generation, Voice
+Generation) ever call `libs.providers.get_provider(...)` at all. That is
+what makes a provider swappable independently: changing which class
+backs `tts` in `config/providers.yaml` only touches Voice Generation's
+own call site, because Timeline Building and Rendering never see a
+provider, only the `VoiceSegment`/`ResolvedAsset` values Voice
+Generation/Asset Generation already resolved.
 
-### 3.4.2 Voice-over module
+The real dependency chain: Asset Generation needs Asset Planning's plan;
+Subtitle Generation needs Voice Generation's durations/timing; Timeline
+Building needs all three of Asset Generation, Voice Generation, and
+Subtitle Generation; Rendering needs Timeline Building. Asset
+Planning/Asset Generation have no real dependency on Voice
+Generation/Subtitle Generation (or vice versa) — they could run in
+parallel — but `VideoAgent.run()` still sequences everything in one
+straight line, the same trade-off the previous four-module design already
+made explicitly for Thumbnail Generation: one job, one linear sequence,
+rather than concurrency inside a single Celery task for a modest latency
+win. A failure partway through (e.g. Rendering breaks) means the *whole*
+video job is retried by the Manager, including every already-succeeded
+module's work — acceptable because most of these modules are fast/cheap
+relative to Rendering, and a partial-video retry was never really "resume
+where it broke" anyway, since Timeline Building's output depends on all
+of them regardless.
 
-- **Input:** `script_segments`.
-- **Does:** sends each segment to the configured TTS provider
-  (`libs.providers.get_provider("tts")`; voice selection, pacing, a
-  pronunciation-correction dictionary for brand/technical terms),
-  normalizes loudness across segments, and captures word-level timestamps
-  where the provider supports them (needed for caption sync).
-- **Output:** per-segment audio `assets` plus duration/timing metadata,
-  written via `libs.storage`.
-- **Failure mode:** provider rate-limit or outage triggers the fallback TTS
-  provider defined in `provider_configs`/`config/providers.yaml`; a segment
-  that still fails after fallback marks the project `NEEDS_HUMAN_REVIEW`
-  rather than silently skipping the audio.
+Module logic itself (deciding what's needed, computing timing, building a
+render plan) is real and tested end to end. Only the true external
+dependencies each module's own leaf call needs remain honest
+`NotImplementedError`s — a real TTS/image-gen/video-gen/stock-media/
+audio-library vendor (all currently `stub` in `config/providers.yaml`)
+and a real compositor (ffmpeg is not installed in the Video Agent's image
+yet). Swapping in real providers exercises the same module code already
+verified against fake ones — nothing about the pipeline itself needs to
+change.
 
-### 3.4.3 Assembly module
+### 3.4.1 Asset Planning module
 
-- **Input:** voice-over audio and storyboard shot list from the two modules
-  above (passed directly in-process — no extra job/queue round-trip), plus
-  channel branding (intro/outro, background music library, caption style).
-- **Does:** composites visuals + voice-over + music + burned-in or soft
-  captions + transitions into the final render (ffmpeg-based pipeline); this
-  is the most CPU/time-intensive module and the primary driver of VPS sizing.
-- **Output:** final rendered video `assets` row (resolution, duration,
-  checksum) referenced by a `renders` row.
-- **Failure mode:** partial-render crashes fail the whole Video Agent job,
-  which the Manager retries from the start (renders are not resumable, and
-  neither is the module sequence); a render exceeding a configured max
-  duration is killed and flagged rather than left running indefinitely.
+- **Input:** `script_segments`, specifically each segment's
+  `production_metadata.asset_requirements` (see §3.3's Script Agent
+  section, and `libs/schemas/script_production.py`).
+- **Does:** routes each requirement's provider-independent `asset_type`
+  (11 values — `ai_video`, `ai_image`, `stock_footage`, `animation`,
+  `diagram`, `map`, `portrait`, `text_overlay`, `subtitle_emphasis`,
+  `sound_effect`, `background_music_cue`) to the `libs.providers`
+  capability that satisfies it (`ASSET_TYPE_ROUTING` in
+  `pipeline_schema.py`) and to the legacy, visual-only `ShotType`
+  (`stock`/`ai_image`/`ai_video`/`text_overlay`) a resolved shot
+  collapses to for `storyboard_shots.shot_type`. `text_overlay` routes to
+  no provider at all (composited directly at render time);
+  `subtitle_emphasis` isn't planned as an asset at all — it's a
+  caption-styling instruction Subtitle Generation reads directly. Pure
+  computation: no provider calls, no database writes, so this module is
+  fully real regardless of which providers happen to be configured for
+  anything downstream.
+- **Output:** a list of planned assets (one per resolvable requirement),
+  each carrying its capability/shot-type routing — not yet resolved to
+  any actual file.
+- **Failure mode:** none of its own — a malformed/missing routing can
+  only happen if the Script Agent's schema itself changed incompatibly,
+  which is caught by that agent's own validation (§3.3), not here.
 
-### 3.4.4 Thumbnail Generation module
+### 3.4.2 Asset Generation module
 
-- **Input:** approved script/title, channel style guide (colors, fonts, logo
-  placement). Has no real dependency on assembly's output — it runs last
-  in the sequence purely to keep `VideoAgent.run()` one straight line, not
-  because it needs the render.
-- **Does:** generates 2–4 thumbnail candidates via the image-gen provider
-  (`libs.providers.get_provider("image_gen")`), composites title
-  text/emphasis per the style guide, tags each as a variant for later A/B
-  testing.
-- **Output:** `thumbnails` rows linked to `assets`, one marked `is_selected`.
-- **Failure mode:** falls back to a template-only thumbnail (no AI image, text
-  over a branded background) if the image-gen provider fails.
-- **Prompt:** `prompts/video/thumbnail_prompt/` (draft — not wired into real
-  code yet, see §6 Phase 1).
+- **Input:** Asset Planning's output.
+- **Does:** for every provider-generated requirement, calls the
+  configured provider for that capability
+  (`libs.providers.get_provider("image_gen"/"video_gen"/"stock_media"/
+  "audio_library")`), stores the result via `libs.storage`, and persists
+  an `assets` row plus (for visual requirements) a `storyboard_shots`
+  row. This is the *only* module that calls those four capabilities —
+  Asset Planning already decided *which* one each requirement needs, so
+  swapping the concrete class behind any of them is a
+  `config/providers.yaml` change that touches nothing else in this
+  pipeline.
+- **Output:** a list of resolved assets — an asset id, a storage path,
+  which provider produced it — one per planned asset (`None` path for a
+  `text_overlay` entry, which produced no file).
+- **Failure mode:** a provider failure propagates and fails the job
+  honestly, same as every other agent in this pipeline — the Manager's
+  reasoning engine decides whether to retry or escalate.
+
+### 3.4.3 Voice Generation module
+
+- **Input:** `script_segments` — runs independently of Asset
+  Planning/Asset Generation; narration has no dependency on which visual
+  assets a segment resolves to.
+- **Does:** sends each segment's text to the configured TTS provider
+  (`libs.providers.get_provider("tts")`), persists the audio as an
+  `assets` row plus a `voiceovers` row. This is the *only* module that
+  calls `tts` — swapping ElevenLabs for Azure Speech touches nothing
+  else in this pipeline, since every other module only ever sees the
+  duration/timing this module resolved, never the vendor.
+- **Output:** a list of voice segments — an asset id, a storage path, a
+  duration, and (when the provider supports it) per-word timing. Falls
+  back to the Script Agent's own `estimated_speech_wpm` pacing estimate
+  when a provider returns no duration/timing of its own, rather than
+  requiring every provider to support it.
+- **Failure mode:** a provider failure propagates and fails the job.
+
+### 3.4.4 Subtitle Generation module
+
+- **Input:** `script_segments` plus Voice Generation's output — a
+  genuine dependency, since caption timing needs the durations/timing
+  Voice Generation already produced.
+- **Does:** splits each segment's narration into caption-sized cues
+  (a handful of words at a time), timed either from the TTS provider's
+  real per-word timestamps when available, or an even split of the
+  segment's known duration across its words otherwise — this module
+  never requires provider-level timestamps to function correctly, only
+  benefits from more precise ones when they exist. Marks a cue for
+  emphasis styling when one of its words matches the segment's
+  `emphasis_words`, or the whole segment carries a `subtitle_emphasis`
+  asset requirement. Makes no provider calls of its own.
+- **Output:** a list of caption cues, timed *segment-relative* (0 = the
+  moment that segment's audio starts) — Timeline Building is the only
+  module that shifts these to absolute project time.
+- **Failure mode:** none of its own; a segment Voice Generation didn't
+  cover simply gets no cues rather than raising.
+
+### 3.4.5 Timeline Building module
+
+- **Input:** `script_segments`, Asset Generation's resolved assets, Voice
+  Generation's voice segments, Subtitle Generation's cues.
+- **Does:** the single place that computes cumulative, absolute project
+  timing. Every upstream module works in segment-relative terms
+  precisely so this arithmetic exists in exactly one place instead of
+  being re-derived (and risking drifting out of sync) in several. A
+  segment's narration audio is the authoritative driver of its length —
+  visuals get stretched/looped/trimmed to fill whatever duration Voice
+  Generation produced, not the other way around. Pure data assembly, no
+  provider calls, no external dependency of any kind — fully real and
+  testable regardless of which providers are configured for anything
+  upstream.
+- **Output:** a `Timeline` — an ordered list of entries (one per
+  segment), each with its absolute start/end time, visual assets,
+  supplementary audio (sound effects/music), shifted subtitle cues, and
+  the segment's own transition/pacing/camera-framing metadata.
+- **Failure mode:** raises if a segment has no corresponding voice
+  segment — the whole timing model depends on narration duration for
+  every segment, so this is treated as a genuine data-integrity failure,
+  not something to silently skip past.
+
+### 3.4.6 Rendering module
+
+- **Input:** the `Timeline`, plus channel branding (intro/outro,
+  caption style) read from `Channel.persona_config`.
+- **Does:** builds a render plan from the Timeline — resolving each
+  entry's visuals, layering voice-over/supplementary audio/captions,
+  applying transitions — then invokes a compositor on it. Never imports
+  `libs.providers` at all: every asset it needs was already resolved by
+  Asset Generation/Voice Generation, so it has nothing to swap and
+  nothing to know about which vendor produced any of it. Building the
+  plan is real, tested logic; actually invoking ffmpeg is not — ffmpeg
+  is deliberately not installed in this image yet (see
+  services/agent_video/requirements.txt), so that one leaf call stays an
+  honest `NotImplementedError` until it is, the primary CPU/time-
+  intensive step and driver of VPS sizing once it lands.
+- **Output:** the final rendered video `assets` row (resolution,
+  duration) referenced by a `renders` row.
+- **Failure mode:** a compositor crash (or, today, its absence) fails
+  the whole Video Agent job, which the Manager retries from the start —
+  renders are not resumable, and neither is the module sequence; a
+  render exceeding a configured max duration should be killed and
+  flagged rather than left running indefinitely, once real rendering
+  exists.
+
+### Thumbnail Generation module
+
+Runs last inside `VideoAgent.run()`, alongside — not part of — the
+six-module pipeline above: it has no real ordering dependency on any of
+it, since it only needs the approved script/title and the channel's
+style guide, not anything Rendering produces. Runs after it anyway to
+keep `VideoAgent.run()` one simple sequence.
+
+- **Input:** approved script/title, channel style guide (colors, fonts,
+  logo placement).
+- **Does:** generates 2–4 thumbnail candidates via the image-gen
+  provider (`libs.providers.get_provider("image_gen")`), composites
+  title text/emphasis per the style guide, tags each as a variant for
+  later A/B testing.
+- **Output:** `thumbnails` rows linked to `assets`, one marked
+  `is_selected`.
+- **Failure mode:** falls back to a template-only thumbnail (no AI
+  image, text over a branded background) if the image-gen provider
+  fails.
+- **Prompt:** `prompts/video/thumbnail_prompt/` (draft — not wired into
+  real code yet, see §6 Phase 1).
 
 ## 3.8 Quality Assurance Agent
 

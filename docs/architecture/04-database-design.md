@@ -109,16 +109,17 @@ Written by the Script Agent (`services/agent_scriptwriter`) — see
 | order_index | int | |
 | segment_type | enum | `hook`, `introduction`, `main_section`, `ending`, `call_to_action` |
 | text | text | voice-over narration for this beat |
-| estimated_duration_sec | int | word count ÷ this beat's own `production_metadata.estimated_speech_wpm` (clamped 80-220); the Voice-over module refines this once real audio exists |
+| estimated_duration_sec | int | word count ÷ this beat's own `production_metadata.estimated_speech_wpm` (clamped 80-220); the Video Agent's Voice Generation module supersedes this with the actual synthesized audio's real duration |
 | scene_notes | text | what's happening on screen during this beat (main sections are prefixed with their internal heading) |
 | visual_notes | text, nullable | concrete visual/b-roll/on-screen-text suggestions — distinct from `scene_notes` |
 | production_metadata | jsonb | structured per-beat production metadata the Video Agent consumes directly — see below |
 
 `production_metadata` (validated against
-`services/agent_scriptwriter/app/script_schema.py`'s
-`SegmentProductionMetadata` before it's ever written) — one column, not
-one per field, since the Video Agent always reads the whole bundle
-together for a beat and never filters segments by an individual field via
+`libs/schemas/script_production.py`'s `SegmentProductionMetadata` before
+it's ever written, and parsed back out the same way by the Video Agent's
+Asset Planning module) — one column, not one per field, since the Video
+Agent always reads the whole bundle together for a beat and never
+filters segments by an individual field via
 SQL (same reasoning as `Channel.persona_config`):
 
 | key | type | notes |
@@ -133,8 +134,10 @@ SQL (same reasoning as `Channel.persona_config`):
 
 `asset_requirements` is a *provider-independent* list — it declares what
 kind of asset a beat needs and what it should contain, never which
-concrete provider/tool supplies it (that's the Video Agent's decision,
-via `libs.providers`, once its modules land). Each entry:
+concrete provider/tool supplies it (that's the Video Agent's Asset
+Planning/Asset Generation modules' decision, via `libs.providers` — see
+[Agent Responsibilities §3.4](./03-agent-responsibilities.md#34-video-agent)).
+Each entry:
 
 | key | type | notes |
 |---|---|---|
@@ -152,19 +155,26 @@ draft fails it, `script_reviewer.py` falls back to the prior draft if its
 own revision does.
 
 Distinct from `libs.models.enums.ShotType` (used by
-`storyboard_shots.shot_type`, below): that's the narrower vocabulary a
-future Storyboard module resolves one concrete *visual* shot into, once
-it translates a visual `asset_requirements` entry into an actual asset.
+`storyboard_shots.shot_type`, below): that's the narrower vocabulary the
+Video Agent's Asset Planning module (`ASSET_TYPE_ROUTING` in
+services/agent_video/app/pipeline_schema.py) resolves one concrete
+*visual* shot into, translating a visual `asset_requirements` entry down
+to the four values `ShotType` distinguishes.
 
 ### `storyboard_shots`
+Written by the Video Agent's Asset Generation module for every *visual*
+planned asset (see [Agent Responsibilities §3.4](./03-agent-responsibilities.md#34-video-agent)) —
+never for the two audio-only asset types (`sound_effect`,
+`background_music_cue`), which have no per-shot concept.
+
 | column | type | notes |
 |---|---|---|
 | id | uuid PK | |
 | script_segment_id | uuid FK → script_segments | |
-| shot_type | enum | `stock`, `ai_image`, `ai_video`, `text_overlay` |
-| prompt_or_query | text | |
-| asset_id | uuid FK → assets, nullable | resolved once sourced/generated |
-| order_index | int | |
+| shot_type | enum | `stock`, `ai_image`, `ai_video`, `text_overlay` — what a script segment's richer 11-value `asset_type` (libs/schemas/script_production.py) collapses to for a resolved visual shot |
+| prompt_or_query | text | the asset requirement's `description` |
+| asset_id | uuid FK → assets, nullable | resolved once sourced/generated; permanently null for a `text_overlay` shot, which is composited directly at render time rather than as a separate file |
+| order_index | int | position within this segment's own requirements list — a segment can plan more than one shot |
 
 ### `assets`
 Generic artifact table — every media file the pipeline produces or sources
@@ -179,14 +189,16 @@ lives here, pointing at object storage (MinIO/S3), not at the database.
 | storage_path | text | object-storage key/URL |
 | checksum | text | integrity check + idempotency guard |
 | duration_sec | numeric | nullable, audio/video only |
-| metadata | jsonb | provider-specific params (voice id, model, prompt, resolution) |
+| metadata | jsonb | provider-specific params (voice id, model, prompt, resolution). Also how the Video Agent's Asset Generation module links a supplementary-audio asset (`sound_effect`/`background_music_cue` — physical type `audio`/`music`) back to the segment/requirement it came from (`{"segment_id", "requirement_index", "script_asset_type"}`), since — unlike visual shots — those have no `storyboard_shots`-style join table of their own. |
 | created_at | timestamptz | |
 
 ### `voiceovers`, `renders`, `thumbnails`
 Thin join tables linking a stage's output to an `assets` row plus
 stage-specific metadata (voice id/provider for `voiceovers`; render engine and
 final duration for `renders`; `is_selected` flag and A/B variant label for
-`thumbnails`).
+`thumbnails`). `voiceovers` is written by the Video Agent's Voice Generation
+module; `renders` by its Rendering module, once a real compositor exists (see
+§3.4 — building the render plan is real today, invoking one is not).
 
 ### `qa_reports`
 | column | type | notes |
@@ -255,7 +267,7 @@ here is expected to match a name declared for that capability in the YAML.
 | column | type | notes |
 |---|---|---|
 | id | uuid PK | |
-| capability | enum | `llm`, `tts`, `image_gen`, `video_gen`, `stock_media` |
+| capability | enum | `llm`, `tts`, `image_gen`, `video_gen`, `stock_media`, `audio_library` |
 | provider_name | text | e.g. `anthropic`, `elevenlabs` |
 | is_active | boolean | |
 | priority_order | int | lower = tried first |

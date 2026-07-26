@@ -61,11 +61,23 @@ for a single developer, not commitments.
   persisted as a versioned `scripts` row plus ordered `script_segments`.
 - Video Agent's modules land one real implementation at a time, in-process
   (no separate agents/queues to coordinate — see
-  [Agent Responsibilities §3.4](./03-agent-responsibilities.md#34-video-agent)):
-  voice-over module with one real TTS provider; assembly module with
+  [Agent Responsibilities §3.4](./03-agent-responsibilities.md#34-video-agent)).
+  **Pipeline structure done** — Asset Planning, Asset Generation, Voice
+  Generation, Subtitle Generation, Timeline Building, and Rendering are
+  six real, independently-testable modules with typed inputs/outputs
+  (services/agent_video/app/pipeline_schema.py), each calling
+  `libs.providers` (`image_gen`/`video_gen`/`stock_media`/
+  `audio_library`/`tts`) only where it genuinely needs to, so swapping
+  one capability's provider never touches another module's code — proven
+  by running the full pipeline against fake providers standing in for
+  each capability. What's still a real vendor integration away: every
+  capability above is still the `stub` implementation
+  (config/providers.yaml), and Rendering's compositor invocation itself
+  is a documented `NotImplementedError` (ffmpeg not installed yet) —
   static images/stock footage + Ken Burns-style motion + burned-in
-  captions via ffmpeg (no AI-generated visuals yet); thumbnail module with
-  template + text overlay only (no AI image generation yet).
+  captions via ffmpeg is still the planned first real implementation, no
+  AI-generated visuals yet. Thumbnail Generation: template + text
+  overlay only (no AI image generation yet), not implemented.
 - Publisher Agent: manual trigger, no auto-scheduling.
 - A human approval checkpoint at **every** stage transition (safest possible
   starting posture).
@@ -128,9 +140,9 @@ human tuning prompts by hand.
 
 - Load/performance testing of the render pipeline; horizontal scaling of
   worker containers (`docker compose up --scale agent_video=N`), or moving
-  that one agent to a beefier/GPU-equipped host if needed — the assembly
+  that one agent to a beefier/GPU-equipped host if needed — the Rendering
   module is still the CPU/RAM-hungry part even though it now shares a
-  container with the other three video modules.
+  container with the other five video pipeline modules.
 - Backup/restore drills: nightly `pg_dump` + MinIO sync to off-VPS storage
   (Hetzner Storage Box / Backblaze B2), with a documented, tested restore
   runbook — not just a cron job nobody has verified.

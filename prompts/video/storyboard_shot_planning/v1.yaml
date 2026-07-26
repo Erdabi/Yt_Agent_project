@@ -8,11 +8,15 @@ template: |
   search query or generation prompt to use.
 metadata:
   description: >
-    Draft prompt for the Video Agent's storyboard module
-    (docs/architecture/03-agent-responsibilities.md §3.4.1). Not wired
-    into real code yet — StoryboardModule.plan_shots() still raises
-    NotImplementedError (docs/architecture/06-roadmap.md, Phase 1). Ready
-    to load via get_prompt_loader().get("video", "storyboard_shot_planning")
-    once it is.
+    Draft prompt predating the Script Agent's asset_requirements field
+    (libs/schemas/script_production.py). The Video Agent's Asset Planning
+    module (services/agent_video/app/modules/asset_planning.py,
+    docs/architecture/03-agent-responsibilities.md §3.4.1) is deterministic,
+    not LLM-based — the Script Agent already fully specifies each
+    segment's visual treatment (asset_type, description) before the
+    script is ever persisted, so there's no remaining creative decision
+    for a call like this one to make. Left unwired rather than deleted,
+    in case a future revision wants Asset Planning to double-check or
+    override the Script Agent's own choices via a real Claude call.
   owner: video-agent
   variables: [segment_order_index, script_segment_text, available_visual_types]

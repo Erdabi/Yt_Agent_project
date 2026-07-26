@@ -2,8 +2,10 @@
 
 Registers the Celery task for the `video` queue — the Manager dispatches
 exactly one job here for the whole `video_creation` stage; see
-video_agent.py for why storyboard/voiceover/assembly/thumbnail live here
-as internal modules rather than four separate agents.
+video_agent.py for why Asset Planning, Asset Generation, Voice
+Generation, Subtitle Generation, Timeline Building, Rendering, and
+Thumbnail Generation live here as internal modules rather than separate
+agents.
 """
 
 from typing import Any

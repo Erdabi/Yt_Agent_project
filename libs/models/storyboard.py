@@ -8,7 +8,8 @@ from libs.models.enums import ShotType
 
 class StoryboardShot(Base, UUIDPrimaryKeyMixin):
     """One planned visual for a script segment — either sourced from stock
-    media or generated — produced by the Storyboard Agent.
+    media or generated — produced by the Video Agent's Asset Generation
+    module (services/agent_video/app/modules/asset_generation.py).
     """
 
     __tablename__ = "storyboard_shots"

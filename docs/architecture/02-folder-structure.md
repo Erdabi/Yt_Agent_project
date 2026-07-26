@@ -57,19 +57,24 @@ yt-agent/
 │   │       ├── worker.py             # ScriptwriterAgent: builds a ProjectContext, persists Script + ScriptSegments
 │   │       ├── script_generator.py   # drafts hook/intro/main sections/ending/CTA (forced tool use, prompts from prompts/script/)
 │   │       ├── script_reviewer.py    # lightweight self-review pass: factual consistency, retention, repetition
-│   │       └── script_schema.py      # shared script/production-metadata schema used by both generator and reviewer
+│   │       └── script_schema.py      # Claude tool-schema + GeneratedScript dataclasses (imports shared types
+│   │                                 # from libs/schemas/script_production.py — see that entry below)
 │   │
-│   ├── agent_video/                  # one agent, four internal modules — replaces what used to be
-│   │   │                             # four separate services/stages (storyboard, voiceover,
-│   │   │                             # video assembly, thumbnail); see 03-agent-responsibilities.md §3.4
+│   ├── agent_video/                  # one agent, six pipeline modules (+ thumbnail) — replaces what used to be
+│   │   │                             # four separate services/stages; see 03-agent-responsibilities.md §3.4
 │   │   └── app/
 │   │       ├── worker.py             # Celery task entrypoint (queue: video)
-│   │       ├── video_agent.py        # VideoAgent.run() calls the four modules below in sequence
+│   │       ├── video_agent.py        # VideoAgent.run() calls the six modules below in sequence, + thumbnail
+│   │       ├── pipeline_schema.py     # typed input/output contracts shared by every module below,
+│   │       │                         # including ASSET_TYPE_ROUTING (script AssetType -> provider capability)
 │   │       └── modules/
-│   │           ├── storyboard.py     # shot_planner + stock_search logic lives here
-│   │           ├── voiceover.py      # ssml_builder + loudness_normalize logic lives here
-│   │           ├── assembly.py       # compositor + captions + ffmpeg_pipeline logic lives here
-│   │           └── thumbnail.py      # text_overlay + style_guide logic lives here
+│   │           ├── asset_planning.py      # routes asset_requirements to capabilities — no provider calls
+│   │           ├── asset_generation.py    # calls image_gen/video_gen/stock_media/audio_library, persists Asset+StoryboardShot
+│   │           ├── voice_generation.py    # calls tts, persists Asset+Voiceover
+│   │           ├── subtitle_generation.py # caption cues from real or estimated word timing — no provider calls
+│   │           ├── timeline_building.py   # cumulative absolute timing + final assembly — no provider calls
+│   │           ├── rendering.py           # builds a render plan; compositor invocation is a stub (no ffmpeg yet)
+│   │           └── thumbnail.py           # text_overlay + style_guide logic lives here (ancillary, not in the 6-stage chain)
 │   │
 │   ├── agent_qa/
 │   │   └── app/{worker.py, technical_checks.py, policy_review.py}
@@ -99,8 +104,10 @@ yt-agent/
 │   │   ├── base.py                   # Provider marker + ProviderConfigError
 │   │   ├── registry.py               # get_provider(capability) -> instance, reads config/providers.yaml
 │   │   ├── video_gen/{base.py, stub_provider.py}
-│   │   ├── tts/{base.py, stub_provider.py}
+│   │   ├── tts/{base.py, stub_provider.py}        # base.py's SynthesisResult carries optional per-word timing
 │   │   ├── image_gen/{base.py, stub_provider.py}
+│   │   ├── stock_media/{base.py, stub_provider.py}    # StockMediaProvider.search() — stock footage/photos
+│   │   ├── audio_library/{base.py, stub_provider.py}  # AudioLibraryProvider.search() — sound effects/music cues
 │   │   └── youtube/{base.py, stub_provider.py}
 │   │
 │   ├── storage/                      # centralized asset storage, keyed by project id
@@ -127,7 +134,9 @@ yt-agent/
 │   ├── models/                       # SQLAlchemy ORM models, shared across all services
 │   └── schemas/                      # Pydantic DTOs shared between orchestrator and agents
 │       ├── jobs.py                   # JobContext — job payloads/results
-│       └── knowledge.py              # KnowledgePackage — the Research Agent's output, Script Agent's input
+│       ├── knowledge.py              # KnowledgePackage — the Research Agent's output, Script Agent's input
+│       └── script_production.py      # SegmentProductionMetadata/AssetRequirement/AssetType — the Script
+│                                     # Agent's output, the Video Agent's Asset Planning module's input
 │
 ├── migrations/                       # Alembic migration scripts (single source of truth for schema)
 │   ├── env.py
@@ -165,7 +174,11 @@ yt-agent/
 - **`libs/schemas/` defines job payload/result contracts.** Since agents
   communicate only via queue messages and DB rows, these Pydantic models are the
   actual "API" between the Orchestrator and each agent — versioned and tested
-  like one.
+  like one. This is also why `script_production.py`'s types live here rather
+  than inside `services/agent_scriptwriter/`: a service's own `app/` package is
+  never imported by another service (only `libs/` is shared), and the Video
+  Agent's Asset Planning module needs to parse `ScriptSegment.production_metadata`
+  with the same types the Script Agent validated it against.
 - **Prompts are versioned files under `prompts/`, not Python string constants.**
   Every agent that calls an LLM loads its prompt through
   `libs.prompts.get_prompt_loader()` rather than embedding the wording in its

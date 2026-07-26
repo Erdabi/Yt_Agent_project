@@ -1,9 +1,10 @@
 """Image generation provider interface.
 
 A concrete implementation generates a still image from a prompt, used by
-the Video Agent's storyboard module (for AI-image shots) and thumbnail
-module (for thumbnail candidates) —
-services/agent_video/app/modules/{storyboard,thumbnail}.py. No real
+the Video Agent's Asset Generation module (for `ai_image`/`diagram`/
+`map`/`portrait` asset requirements) and Thumbnail Generation module (for
+thumbnail candidates) —
+services/agent_video/app/modules/{asset_generation,thumbnail}.py. No real
 implementation exists yet — see stub_provider.py and
 docs/architecture/06-roadmap.md, Phase 1/4.
 """

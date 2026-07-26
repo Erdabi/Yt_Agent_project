@@ -29,9 +29,12 @@ These recur throughout every document and should guide implementation decisions 
   spaghetti-choreography failure mode where business logic is scattered across
   services.
 - **Every AI capability sits behind a provider abstraction.** LLM, TTS, image
-  generation, video generation, and stock-footage sourcing are all accessed through
-  an internal interface (`libs/providers/*`). Swapping Anthropic for OpenAI, or
-  ElevenLabs for Azure Speech, is a configuration change, not a code change.
+  generation, video generation, stock-footage sourcing, and audio-library sourcing
+  are all accessed through an internal interface (`libs/providers/*`). Swapping
+  Anthropic for OpenAI, or ElevenLabs for Azure Speech, is a configuration change,
+  not a code change — and because the Video Agent's pipeline modules only ever
+  pass each other already-resolved assets (never a provider instance), swapping
+  one capability's provider never touches another module's code either.
 - **Everything that happens is a row in `jobs`.** Every agent invocation is recorded
   with its inputs, outputs, status, and error — this is the audit trail, the retry
   mechanism, and the debugging tool, all at once.

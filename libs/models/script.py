@@ -75,20 +75,21 @@ class ScriptSegment(Base, UUIDPrimaryKeyMixin):
     scene_notes: Mapped[str | None] = mapped_column(Text)
     # Concrete visual/b-roll/on-screen-graphic ideas for this beat —
     # distinct from `scene_notes` (what's happening on screen); this is
-    # what it should look like. The Storyboard module
-    # (services/agent_video/app/modules/storyboard.py) resolves these
-    # into concrete assets once implemented.
+    # what it should look like. Informational/legacy alongside the
+    # structured `production_metadata.asset_requirements` below, which is
+    # what the Video Agent's Asset Planning/Asset Generation modules
+    # (services/agent_video/app/modules/) actually act on.
     visual_notes: Mapped[str | None] = mapped_column(Text)
-    # Structured production metadata for this beat — camera framing,
-    # visual asset type, transition, pacing, narration emotion, emphasis
-    # words, estimated speech speed, on-screen text — validated against
-    # services/agent_scriptwriter/app/script_schema.py's
-    # `SegmentProductionMetadata` on the way in. JSONB rather than one
-    # column per field: the Video Agent always reads this whole bundle
-    # together for one beat, it never filters segments by an individual
-    # field via SQL, so there's nothing a relational column would buy
-    # over a single validated blob (same reasoning as
-    # `Channel.persona_config`).
+    # Structured production metadata for this beat — camera framing, a
+    # list of provider-independent asset requirements, transition,
+    # pacing, narration emotion, emphasis words, estimated speech speed —
+    # validated against libs/schemas/script_production.py's
+    # `SegmentProductionMetadata` on the way in (by the Script Agent) and
+    # the way out (by the Video Agent's Asset Planning module). JSONB
+    # rather than one column per field: a beat is always read as one
+    # whole bundle, never filtered by an individual field via SQL, so
+    # there's nothing a relational column would buy over a single
+    # validated blob (same reasoning as `Channel.persona_config`).
     production_metadata: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
 
     script: Mapped["Script"] = relationship(back_populates="segments")

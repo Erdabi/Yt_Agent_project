@@ -92,6 +92,10 @@ class ProviderCapability(str, enum.Enum):
     IMAGE_GEN = "image_gen"
     VIDEO_GEN = "video_gen"
     STOCK_MEDIA = "stock_media"
+    #: Sourcing supplementary audio (sound effects, background music
+    #: cues) — see libs/providers/audio_library/. Distinct from TTS,
+    #: which is narration, not incidental audio.
+    AUDIO_LIBRARY = "audio_library"
 
 
 class ScriptSegmentType(str, enum.Enum):

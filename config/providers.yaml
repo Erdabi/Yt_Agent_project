@@ -78,3 +78,33 @@ youtube:
   #     config: {}
   #     secret_ref: YOUTUBE_OAUTH_CLIENT_SECRET
   # and set active: youtube_data_api.
+
+stock_media:
+  active: stub
+  providers:
+    stub:
+      class: libs.providers.stock_media.stub_provider.StubStockMediaProvider
+      config: {}
+  # Real provider example (Pexels/Pixabay — Phase 1): add
+  # libs/providers/stock_media/pexels_provider.py subclassing
+  # StockMediaProvider, then:
+  #   pexels:
+  #     class: libs.providers.stock_media.pexels_provider.PexelsProvider
+  #     config: {}
+  #     secret_ref: PEXELS_API_KEY
+  # and set active: pexels.
+
+audio_library:
+  active: stub
+  providers:
+    stub:
+      class: libs.providers.audio_library.stub_provider.StubAudioLibraryProvider
+      config: {}
+  # Real provider example (Epidemic Sound/Freesound — Phase 1): add
+  # libs/providers/audio_library/freesound_provider.py subclassing
+  # AudioLibraryProvider, then:
+  #   freesound:
+  #     class: libs.providers.audio_library.freesound_provider.FreesoundProvider
+  #     config: {}
+  #     secret_ref: FREESOUND_API_KEY
+  # and set active: freesound.
