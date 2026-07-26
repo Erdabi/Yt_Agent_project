@@ -41,6 +41,7 @@ import anthropic
 
 from libs.core.config import get_settings
 from libs.core.logging import get_logger
+from libs.llm_usage import track_llm_call
 from libs.prompts import PromptNotFoundError, PromptRenderError, get_prompt_loader
 from libs.schemas.knowledge import Entity, KnowledgePackage, TimelineEntry, VerifiedFact
 
@@ -172,6 +173,7 @@ class KnowledgeBuilder:
     def build(
         self,
         *,
+        project_id: str,
         topic: str,
         target_audience: str,
         channel_niche: str,
@@ -183,9 +185,10 @@ class KnowledgeBuilder:
             raise KnowledgePackageError("ANTHROPIC_API_KEY is not configured")
 
         try:
-            system_prompt = self._prompts.get(
+            system_template = self._prompts.get(
                 "research", "build_knowledge_package_system", provider=_PROMPT_PROVIDER
-            ).render()
+            )
+            system_prompt = system_template.render()
             user_prompt = self._prompts.get(
                 "research", "build_knowledge_package_user", provider=_PROMPT_PROVIDER
             ).render(
@@ -199,22 +202,40 @@ class KnowledgeBuilder:
         except (PromptNotFoundError, PromptRenderError) as exc:
             raise KnowledgePackageError(f"prompt template error: {exc}") from exc
 
-        raw = self._research_until_reported(system_prompt, user_prompt)
+        raw = self._research_until_reported(
+            project_id, system_template.version, system_prompt, user_prompt
+        )
         return self._to_package(raw, topic=topic, niche=channel_niche)
 
-    def _research_until_reported(self, system_prompt: str, user_prompt: str) -> dict[str, Any]:
+    def _research_until_reported(
+        self, project_id: str, prompt_version: str, system_prompt: str, user_prompt: str
+    ) -> dict[str, Any]:
         messages: list[dict[str, Any]] = [{"role": "user", "content": user_prompt}]
 
         for attempt in range(_MAX_CONTINUATIONS + 1):
             try:
-                response = self._client.messages.create(
+                # Each turn of this loop is its own separate billable API
+                # call (a `pause_turn` continuation resends the whole
+                # conversation so far) — so it gets its own usage-log row,
+                # not just one for the whole method.
+                with track_llm_call(
+                    project_id=project_id,
+                    agent_name="research",
+                    call_site="knowledge_builder.build",
                     model=self._model,
-                    max_tokens=8192,
-                    output_config={"effort": self._effort},
-                    system=system_prompt,
-                    tools=[_WEB_SEARCH_TOOL, _WEB_FETCH_TOOL, _PROPOSE_KNOWLEDGE_PACKAGE_TOOL],
-                    messages=messages,
-                )
+                    prompt_name="build_knowledge_package",
+                    prompt_version=prompt_version,
+                ) as usage:
+                    response = self._client.messages.create(
+                        model=self._model,
+                        max_tokens=8192,
+                        output_config={"effort": self._effort},
+                        system=system_prompt,
+                        tools=[_WEB_SEARCH_TOOL, _WEB_FETCH_TOOL, _PROPOSE_KNOWLEDGE_PACKAGE_TOOL],
+                        messages=messages,
+                    )
+                    usage["input_tokens"] = response.usage.input_tokens
+                    usage["output_tokens"] = response.usage.output_tokens
             except anthropic.APIError as exc:
                 logger.error("knowledge_builder_call_failed", error=str(exc), attempt=attempt)
                 raise KnowledgePackageError(f"Claude API call failed: {exc}") from exc

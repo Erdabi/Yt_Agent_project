@@ -146,6 +146,7 @@ class ResearchAgent(BaseAgent):
             channel_niche=channel_niche, seed_topics=seed_topics or [goal]
         )
         generated = self._generator.generate(
+            project_id=context.project_id,
             channel_niche=channel_niche,
             channel_persona=channel_persona,
             banned_topics=banned_topics,
@@ -158,6 +159,7 @@ class ResearchAgent(BaseAgent):
         research_notes, score, duplicate = self._apply_dedup(idea_data, existing_snapshot)
 
         package = self._knowledge.build(
+            project_id=context.project_id,
             topic=idea_data.topic,
             target_audience=idea_data.target_audience,
             channel_niche=channel_niche,
@@ -230,6 +232,7 @@ class ResearchAgent(BaseAgent):
             channel_niche=channel_niche, seed_topics=seed_topics or None
         )
         generated = self._generator.generate(
+            project_id=None,
             channel_niche=channel_niche,
             channel_persona=channel_persona,
             banned_topics=banned_topics,

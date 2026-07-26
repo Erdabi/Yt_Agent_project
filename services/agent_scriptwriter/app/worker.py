@@ -6,24 +6,31 @@ breaking it into timed segments, an optional fact-check pass — is not
 implemented yet. `run()` raises `NotImplementedError` rather than
 returning a fabricated script; see
 docs/architecture/03-agent-responsibilities.md §3.3 and
-docs/architecture/06-roadmap.md, Phase 1. Its generation prompt already
-exists at prompts/script/generate_script/ (see libs/prompts) — load it
-via `get_prompt_loader().get("script", "generate_script")` once this lands.
+docs/architecture/06-roadmap.md, Phase 1.
 
-The Research Agent (services/agent_research) already produces a
-Knowledge Package for the approved idea this job writes from — load it
-instead of re-researching the topic:
+Once implemented, load everything this agent needs through the Project
+Context Builder instead of separately querying the channel, project,
+idea, and knowledge package:
 
-    from libs.storage import get_storage_backend
-    from libs.schemas.knowledge import KnowledgePackage
+    from libs.context import build_project_context
 
-    package = KnowledgePackage.model_validate_json(
-        get_storage_backend().read_bytes(idea.knowledge_package_json_path)
-    )
+    context = build_project_context(project.id, consumer_prompt=("script", "generate_script"))
+    # context.channel, context.project, context.research,
+    # context.knowledge_package, context.prompt_version, context.manager
 
-See libs/schemas/knowledge.py for the full shape (verified facts,
-timeline, entities, citations, keywords, related topics, hooks,
-supporting notes).
+`context.prompt_version` is already the concrete resolved version (e.g.
+"v1") for prompts/script/generate_script/ — load the template itself via
+`get_prompt_loader().get("script", "generate_script", version=context.prompt_version)`.
+`context.knowledge_package` is the Research Agent's deep-research output
+for the approved idea (verified facts, timeline, entities, citations,
+keywords, related topics, hooks, supporting notes — see
+libs/schemas/knowledge.py) — write from it directly instead of
+re-researching the topic.
+
+Wrap the Claude call itself in `libs.llm_usage.track_llm_call(...)`, the
+same way services/orchestrator/app/manager/reasoning.py and
+services/agent_research/app/idea_generator.py do, so this agent's usage
+is tracked from day one rather than retrofitted later.
 """
 
 from typing import Any

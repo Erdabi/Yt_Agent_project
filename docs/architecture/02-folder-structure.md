@@ -107,6 +107,17 @@ yt-agent/
 │   │   ├── loader.py                 # PromptLoader/PromptTemplate: versioning + variables + provider overrides
 │   │   └── registry.py               # get_prompt_loader(), reads PROMPTS_ROOT
 │   │
+│   ├── context/                      # Project Context Builder — gathers Channel/Project/Research/
+│   │   │                             # Knowledge Package/prompt version/Manager settings into one
+│   │   │                             # immutable object, instead of a consumer querying each itself
+│   │   ├── schema.py                 # ProjectContext and its frozen sub-models
+│   │   └── builder.py                # build_project_context(project_id) — real DB+storage read, no writes
+│   │
+│   ├── llm_usage/                    # usage tracking for every LLM call — provider, model, prompt
+│   │   │                             # version, tokens, elapsed time, estimated cost
+│   │   ├── tracker.py                 # track_llm_call() context manager + record_llm_usage()
+│   │   └── pricing.py                 # per-model $/1M-token table + estimate_cost_usd()
+│   │
 │   ├── models/                       # SQLAlchemy ORM models, shared across all services
 │   └── schemas/                      # Pydantic DTOs shared between orchestrator and agents
 │       ├── jobs.py                   # JobContext — job payloads/results
@@ -157,6 +168,14 @@ yt-agent/
   (`v1.claude.yaml`) without a code change. See
   [Agent Responsibilities §3.1](./03-agent-responsibilities.md) for the one
   place this is wired into real code today (the Manager's reasoning engine).
+- **`libs/context/` gathers, `libs/llm_usage/` measures.** A downstream agent
+  (the Script Agent first) calls `build_project_context(project_id)` once and
+  gets back a single immutable snapshot instead of separately querying
+  Channel/Project/VideoIdea/storage/settings itself; every Claude call in the
+  codebase wraps its API call in `libs.llm_usage.track_llm_call(...)`, which
+  always records one `LLMUsageLog` row — success or failure — so spend is
+  attributable by project/agent/model without depending on any agent
+  remembering to log it manually.
 - **Migrations live in one top-level `migrations/` folder**, not per-service,
   because there is one shared database. This avoids migration-ordering
   conflicts that come from splitting migrations across services.

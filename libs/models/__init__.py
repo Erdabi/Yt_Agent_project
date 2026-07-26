@@ -16,6 +16,7 @@ from libs.models.qa import QAReport
 from libs.models.script import Script, ScriptSegment
 from libs.models.storyboard import StoryboardShot
 from libs.models.system import SystemEvent
+from libs.models.usage import LLMUsageLog
 from libs.models.user import User
 
 __all__ = [
@@ -37,5 +38,6 @@ __all__ = [
     "ProviderConfig",
     "ProviderUsageLog",
     "SystemEvent",
+    "LLMUsageLog",
     "User",
 ]

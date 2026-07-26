@@ -9,7 +9,13 @@ Manager Agent's job (see
 Any agent that calls an LLM loads its prompt from a versioned template file
 (`prompts/<agent>/<name>/`) through the Prompt Management System
 (`libs/prompts`) rather than embedding the wording in its own module — see
-`prompts/README.md`.
+`prompts/README.md`. Every such call is also wrapped in
+`libs.llm_usage.track_llm_call(...)`, which records one `LLMUsageLog` row
+per API call — provider, model, resolved prompt version, input/output
+tokens, elapsed time, estimated cost — against the project it was spent on,
+success or failure alike, for future analytics/optimization; see the
+`libs/llm_usage/` entry in [Folder Structure](./02-folder-structure.md) and
+the `llm_usage_log` table in [Database Design §4.2](./04-database-design.md).
 
 ---
 
@@ -138,6 +144,13 @@ runs in one of two modes:
   the job — cheap to retry, expensive to send bad input downstream.
 - **Prompt:** `prompts/script/generate_script/` (draft — not wired into real
   code yet, see §6 Phase 1).
+- **Context:** once implemented, receives one `ProjectContext` from
+  `libs.context.build_project_context(project_id)` — Channel Profile, Project
+  metadata, Research summary, Knowledge Package, resolved prompt version, and
+  Manager settings, gathered in a single immutable object — instead of
+  separately querying the channel, project, idea, and knowledge package
+  itself the way `services/agent_research/app/worker.py` does today. See
+  [Folder Structure](./02-folder-structure.md)'s `libs/context/` entry.
 
 ## 3.4 Video Agent
 

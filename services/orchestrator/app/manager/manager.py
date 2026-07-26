@@ -95,6 +95,7 @@ class ManagerAgent:
             max_retries = get_settings().job_max_retries
 
             decision = self._reasoning.decide(
+                project_id=project_id,
                 phase=step.phase,
                 stage=current_stage.value,
                 job_status=job_status.value,

@@ -25,6 +25,7 @@ import anthropic
 
 from libs.core.config import get_settings
 from libs.core.logging import get_logger
+from libs.llm_usage import track_llm_call
 from libs.prompts import PromptNotFoundError, PromptRenderError, get_prompt_loader
 
 logger = get_logger(__name__)
@@ -145,6 +146,7 @@ class IdeaGenerator:
     def generate(
         self,
         *,
+        project_id: str | None,
         channel_niche: str,
         channel_persona: str,
         banned_topics: list[str] | None,
@@ -157,9 +159,10 @@ class IdeaGenerator:
             raise IdeaGenerationError("ANTHROPIC_API_KEY is not configured")
 
         try:
-            system_prompt = self._prompts.get(
+            system_template = self._prompts.get(
                 "research", "generate_ideas_system", provider=_PROMPT_PROVIDER
-            ).render()
+            )
+            system_prompt = system_template.render()
             user_prompt = self._prompts.get(
                 "research", "generate_ideas_user", provider=_PROMPT_PROVIDER
             ).render(
@@ -175,15 +178,25 @@ class IdeaGenerator:
             raise IdeaGenerationError(f"prompt template error: {exc}") from exc
 
         try:
-            response = self._client.messages.create(
+            with track_llm_call(
+                project_id=project_id,
+                agent_name="research",
+                call_site="idea_generator.generate",
                 model=self._model,
-                max_tokens=4096,
-                output_config={"effort": self._effort},
-                system=system_prompt,
-                tools=[_PROPOSE_IDEAS_TOOL],
-                tool_choice={"type": "tool", "name": "propose_video_ideas"},
-                messages=[{"role": "user", "content": user_prompt}],
-            )
+                prompt_name="generate_ideas",
+                prompt_version=system_template.version,
+            ) as usage:
+                response = self._client.messages.create(
+                    model=self._model,
+                    max_tokens=4096,
+                    output_config={"effort": self._effort},
+                    system=system_prompt,
+                    tools=[_PROPOSE_IDEAS_TOOL],
+                    tool_choice={"type": "tool", "name": "propose_video_ideas"},
+                    messages=[{"role": "user", "content": user_prompt}],
+                )
+                usage["input_tokens"] = response.usage.input_tokens
+                usage["output_tokens"] = response.usage.output_tokens
         except anthropic.APIError as exc:
             logger.error("idea_generator_call_failed", error=str(exc))
             raise IdeaGenerationError(f"Claude API call failed: {exc}") from exc

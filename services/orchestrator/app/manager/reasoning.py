@@ -32,6 +32,7 @@ import anthropic
 
 from libs.core.config import get_settings
 from libs.core.logging import get_logger
+from libs.llm_usage import track_llm_call
 from libs.models.enums import JobStatus
 from libs.prompts import PromptNotFoundError, PromptRenderError, get_prompt_loader
 
@@ -116,6 +117,7 @@ class ReasoningEngine:
     def decide(
         self,
         *,
+        project_id: str,
         phase: str,
         stage: str,
         job_status: str,
@@ -130,12 +132,13 @@ class ReasoningEngine:
             )
 
         try:
-            system_prompt = self._prompts.get(
+            system_template = self._prompts.get(
                 "manager",
                 "workflow_decision_system",
                 version=self._prompt_version,
                 provider=_PROMPT_PROVIDER,
-            ).render()
+            )
+            system_prompt = system_template.render()
             prompt = self._prompts.get(
                 "manager",
                 "workflow_decision_user",
@@ -161,15 +164,25 @@ class ReasoningEngine:
             )
 
         try:
-            response = self._client.messages.create(
+            with track_llm_call(
+                project_id=project_id,
+                agent_name="manager",
+                call_site="reasoning.decide",
                 model=self._model,
-                max_tokens=4096,
-                output_config={"effort": self._effort},
-                system=system_prompt,
-                tools=[_DECIDE_ACTION_TOOL],
-                tool_choice={"type": "tool", "name": "decide_workflow_action"},
-                messages=[{"role": "user", "content": prompt}],
-            )
+                prompt_name="workflow_decision",
+                prompt_version=system_template.version,
+            ) as usage:
+                response = self._client.messages.create(
+                    model=self._model,
+                    max_tokens=4096,
+                    output_config={"effort": self._effort},
+                    system=system_prompt,
+                    tools=[_DECIDE_ACTION_TOOL],
+                    tool_choice={"type": "tool", "name": "decide_workflow_action"},
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                usage["input_tokens"] = response.usage.input_tokens
+                usage["output_tokens"] = response.usage.output_tokens
         except anthropic.APIError as exc:
             logger.error("reasoning_engine_call_failed", error=str(exc))
             return self._fallback(

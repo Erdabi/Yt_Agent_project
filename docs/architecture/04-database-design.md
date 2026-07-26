@@ -28,6 +28,7 @@ erDiagram
     PUBLICATIONS ||--o{ PERFORMANCE_METRICS : has
     PROVIDER_CONFIGS ||--o{ PROVIDER_USAGE_LOG : logs
     PROJECTS ||--o{ PROVIDER_USAGE_LOG : incurs
+    PROJECTS ||--o{ LLM_USAGE_LOG : incurs
 ```
 
 ## 4.2 Core tables
@@ -213,6 +214,37 @@ here is expected to match a name declared for that capability in the YAML.
 ### `provider_usage_log`
 Per-call cost/usage tracking, keyed to `provider_configs`, for spend
 attribution per project and per provider.
+
+### `llm_usage_log`
+One row per LLM API call, written by `libs.llm_usage.track_llm_call` — every
+Claude call site in this codebase (`reasoning.py`, `idea_generator.py`,
+`knowledge_builder.py`) wraps its call with it, success or failure alike, for
+future analytics/optimization. Deliberately a separate table from
+`provider_usage_log` above: that table is keyed to a `provider_configs` row
+(the DB-driven, swappable-vendor system for video/TTS/image/YouTube), which
+none of this table's call sites have, since they all call the Anthropic SDK
+directly rather than going through `libs.providers`.
+
+| column | type | notes |
+|---|---|---|
+| id | uuid PK | |
+| project_id | uuid FK, nullable | `ON DELETE SET NULL` — usage history outlives project deletion, same as `provider_usage_log.project_id` |
+| agent_name | text | e.g. `manager`, `research` |
+| call_site | text | e.g. `reasoning.decide`, `knowledge_builder.build` — one call site can log multiple rows per invocation (see below) |
+| provider | text | `anthropic` today |
+| model | text | the concrete model id called |
+| prompt_name, prompt_version | text, nullable | the concrete resolved version (e.g. `v1`), never the literal `"latest"` |
+| input_tokens, output_tokens | int, nullable | null when the call failed before a response came back |
+| elapsed_ms | int | wall-clock time for the call |
+| cost_estimate_usd | numeric(10,6), nullable | from `libs.llm_usage.pricing`'s per-model rate table; null for an unknown model or missing token counts, never a guessed number |
+| success | boolean | |
+| error | text, nullable | |
+| called_at | timestamptz | |
+
+`knowledge_builder.build`'s web-search-backed call can pause mid-turn
+(`stop_reason: "pause_turn"`) and resend the conversation as a continuation —
+each continuation is its own billable API call and gets its own row, so one
+`build()` invocation can log more than one `llm_usage_log` row.
 
 ### `system_events` (audit log)
 Generic append-only event log (`entity_type`, `entity_id`, `event_type`,
