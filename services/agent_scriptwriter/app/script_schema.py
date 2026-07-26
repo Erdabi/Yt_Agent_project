@@ -5,13 +5,18 @@ two independently-evolving ones the worker would have to reconcile.
 
 Every segment carries, in addition to narration and visuals, structured
 production metadata the Video Agent (services/agent_video) can consume
-directly — camera framing, visual asset type, transition, pacing,
-narration emotion, emphasis words, estimated speech speed, and optional
-on-screen text — without parsing free text out of a notes column.
-`visual_asset_type` intentionally reuses `libs.models.enums.ShotType`,
-the same vocabulary `StoryboardShot.shot_type` (libs/models/storyboard.py)
-already uses, so a future Storyboard module never needs to translate
-between two different vocabularies for the same concept.
+directly — camera framing, transition, pacing, narration emotion,
+emphasis words, estimated speech speed, and a structured list of asset
+requirements — without parsing free text out of a notes column.
+
+`asset_requirements` (`AssetRequirement`, below) is deliberately
+*provider-independent*: it declares what kind of asset a beat needs (an
+AI-generated video, a stock clip, a diagram, a sound effect, ...) and
+what it should contain, never which concrete provider or tool should
+supply it — the same separation `libs.providers` already enforces for
+capability selection (an agent asks for "the active TTS provider", never
+a vendor by name). Resolving a requirement into a concrete asset is the
+Video Agent's job, once its Storyboard/Voice-over/Assembly modules land.
 """
 
 import enum
@@ -19,7 +24,6 @@ from dataclasses import dataclass
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from libs.models.enums import ShotType
 from libs.schemas.knowledge import KnowledgePackage
 
 
@@ -45,21 +49,73 @@ class Pacing(str, enum.Enum):
     SLOW = "slow"
 
 
+class AssetType(str, enum.Enum):
+    """What kind of production asset a beat needs — the full vocabulary a
+    script can draw from, independent of any specific provider. Distinct
+    from `libs.models.enums.ShotType` (used by `StoryboardShot.shot_type`
+    once the Storyboard module resolves a *visual* requirement into one
+    concrete shot): this is the broader, upstream "what's needed" the
+    Script Agent declares, covering audio as well as several visual
+    treatments `ShotType` doesn't distinguish. Translating a visual
+    `AssetType` down to a `ShotType` is that future module's job, not
+    this one's.
+    """
+
+    AI_VIDEO = "ai_video"
+    AI_IMAGE = "ai_image"
+    STOCK_FOOTAGE = "stock_footage"
+    ANIMATION = "animation"
+    DIAGRAM = "diagram"
+    MAP = "map"
+    PORTRAIT = "portrait"
+    TEXT_OVERLAY = "text_overlay"
+    SUBTITLE_EMPHASIS = "subtitle_emphasis"
+    SOUND_EFFECT = "sound_effect"
+    BACKGROUND_MUSIC_CUE = "background_music_cue"
+
+
+#: Every `AssetType` that produces something visible on screen — i.e.
+#: every one of them except the two purely audio types. Used to validate
+#: that a beat's described visual actually has something declared to
+#: realize it (see `_validate_asset_coverage` below).
+_VISUAL_ASSET_TYPES = frozenset(AssetType) - {AssetType.SOUND_EFFECT, AssetType.BACKGROUND_MUSIC_CUE}
+
+
+class AssetRequirement(BaseModel):
+    """One concrete production need for a beat. `description` is content
+    — what it should actually show or sound like (e.g. "close-up of a
+    chisel bevel at a 25-degree angle", "a soft ambient workshop drone")
+    — never a provider, tool, or model name; which one fulfills it is a
+    decision for whatever satisfies this requirement later, not this
+    agent's to make.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    asset_type: AssetType
+    description: str
+
+
 class SegmentProductionMetadata(BaseModel):
-    """Everything the Video Agent needs to turn one script beat into a
-    concrete shot, without additional parsing.
+    """Everything the Video Agent needs to turn one script beat into
+    concrete assets, without additional parsing.
     """
 
     model_config = ConfigDict(frozen=True)
 
     camera_framing: str
-    visual_asset_type: ShotType
+    #: Every production asset this beat needs — a beat can require more
+    #: than one at once (e.g. a stock clip AND a sound effect AND a text
+    #: overlay). At least one must be a visual type
+    #: (`_VISUAL_ASSET_TYPES`) covering what `scene_description`/
+    #: `visual_suggestions` describes — enforced by
+    #: `_validate_asset_coverage`, not just prompted for.
+    asset_requirements: list[AssetRequirement] = Field(default_factory=list)
     transition_type: TransitionType
     pacing: Pacing
     narration_emotion: str
     emphasis_words: list[str] = Field(default_factory=list)
     estimated_speech_wpm: int
-    on_screen_text: list[str] = Field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -93,6 +149,30 @@ class GeneratedScript:
 
 # --- JSON tool-schema fragments, shared by the generate and review calls -
 
+_ASSET_REQUIREMENT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "asset_type": {
+            "type": "string",
+            "enum": [t.value for t in AssetType],
+            "description": "What kind of production asset this is.",
+        },
+        "description": {
+            "type": "string",
+            "description": (
+                "What this asset should actually show or sound like, in "
+                'content terms (e.g. "close-up of a chisel bevel at a '
+                '25-degree angle", "a map highlighting the Pacific '
+                'Northwest", "a soft ambient workshop drone") — never '
+                "which provider or tool should make it; that is not your "
+                "decision."
+            ),
+        },
+    },
+    "required": ["asset_type", "description"],
+    "additionalProperties": False,
+}
+
 _PRODUCTION_METADATA_PROPERTIES = {
     "camera_framing": {
         "type": "string",
@@ -102,10 +182,20 @@ _PRODUCTION_METADATA_PROPERTIES = {
             '"point-of-view", "aerial") — concrete, not "a nice shot."'
         ),
     },
-    "visual_asset_type": {
-        "type": "string",
-        "enum": [t.value for t in ShotType],
-        "description": "What kind of visual asset should fill this beat.",
+    "asset_requirements": {
+        "type": "array",
+        "items": _ASSET_REQUIREMENT_SCHEMA,
+        "minItems": 1,
+        "description": (
+            "Every concrete production asset this beat needs, independent "
+            "of which provider ultimately supplies it. A beat can need "
+            "more than one at once (e.g. a stock video clip AND a sound "
+            "effect AND a text overlay). At least one entry must be a "
+            "visual asset (any asset_type other than sound_effect or "
+            "background_music_cue) that covers what scene_description/"
+            "visual_suggestions describes — a beat cannot describe a "
+            "visual with nothing declared to realize it."
+        ),
     },
     "transition_type": {
         "type": "string",
@@ -145,14 +235,6 @@ _PRODUCTION_METADATA_PROPERTIES = {
             "Estimated narration speed in words per minute for this beat "
             "(typically 130-170) — slower for weighty/serious moments, "
             "faster for punchy/urgent ones."
-        ),
-    },
-    "on_screen_text": {
-        "type": "array",
-        "items": {"type": "string"},
-        "description": (
-            "Any text overlays for this beat (a title card, a key stat, a "
-            "callout) — empty if none."
         ),
     },
 }
@@ -299,12 +381,52 @@ def _section_from_dict(data: dict) -> ScriptSection:
     )
 
 
+def _beat_covers_visual(beat: ScriptBeat) -> bool:
+    return any(req.asset_type in _VISUAL_ASSET_TYPES for req in beat.production.asset_requirements)
+
+
+def _validate_asset_coverage(script: GeneratedScript) -> None:
+    """Every beat's `scene_description`/`visual_suggestions` describes a
+    visual — both are required, non-empty fields for every beat (see
+    `_BEAT_PROPERTIES`) — so every beat must declare at least one
+    visual-category asset requirement to actually realize it. The JSON
+    schema's `minItems: 1` on `asset_requirements` only guards against an
+    empty list; it can't express "and at least one of them must be a
+    visual type," so that's enforced here instead, the same way
+    `ScriptGenerator`/`ScriptReviewer` already can't rely on JSON schema
+    alone for "main_sections must be non-empty" and check it in Python.
+
+    Raises `ValueError` — a caller decides what that means: `generate()`
+    turns it into a hard `ScriptGenerationError` (no fallback exists for
+    an initial draft); `review()`'s existing exception handling already
+    catches it and falls back to the prior, already-valid draft.
+    """
+    beats: list[tuple[str, ScriptBeat]] = [
+        ("hook", script.hook),
+        ("introduction", script.introduction),
+        *(
+            (f'main_sections[{i}] ("{section.heading}")', section)
+            for i, section in enumerate(script.main_sections)
+        ),
+        ("ending", script.ending),
+        ("call_to_action", script.call_to_action),
+    ]
+    for label, beat in beats:
+        if not _beat_covers_visual(beat):
+            raise ValueError(
+                f"{label} describes a visual (scene_description/visual_suggestions) "
+                "but its asset_requirements has no corresponding visual asset "
+                "(only sound_effect/background_music_cue, or none at all)"
+            )
+
+
 def script_from_dict(raw: dict, *, review_notes: str = "") -> GeneratedScript:
     """Parse one `propose_script`/`submit_reviewed_script` tool-call
-    payload into a `GeneratedScript`. `review_notes` is supplied by the
-    caller since only the review tool's schema includes that field.
+    payload into a `GeneratedScript`, validating asset coverage before
+    returning it. `review_notes` is supplied by the caller since only the
+    review tool's schema includes that field.
     """
-    return GeneratedScript(
+    script = GeneratedScript(
         structure_notes=raw["structure_notes"],
         retention_notes=raw["retention_notes"],
         hook=_beat_from_dict(raw["hook"]),
@@ -314,6 +436,8 @@ def script_from_dict(raw: dict, *, review_notes: str = "") -> GeneratedScript:
         call_to_action=_beat_from_dict(raw["call_to_action"]),
         review_notes=review_notes,
     )
+    _validate_asset_coverage(script)
+    return script
 
 
 def _beat_to_dict(beat: ScriptBeat) -> dict:

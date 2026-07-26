@@ -40,8 +40,19 @@ template: |
     will act on directly, with no further interpretation needed:
     - camera_framing: the shot type (e.g. "wide shot", "close-up",
       "over-the-shoulder", "point-of-view").
-    - visual_asset_type: one of stock / ai_image / ai_video / text_overlay
-      — what kind of visual should fill this beat.
+    - asset_requirements: every concrete production asset this beat
+      needs — independent of which provider ultimately supplies it, that
+      is not your decision to make. Each entry has an asset_type (one of:
+      ai_video, ai_image, stock_footage, animation, diagram, map,
+      portrait, text_overlay, subtitle_emphasis, sound_effect,
+      background_music_cue) and a description of what it should actually
+      show or sound like in content terms, never which tool/provider
+      should make it. A beat can need more than one at once — e.g. a
+      stock video clip AND a sound effect AND a text overlay. At least
+      one entry must be a visual asset (anything other than sound_effect
+      or background_music_cue) that covers what scene_description/
+      visual_suggestions describes: a beat cannot describe a visual with
+      nothing declared to realize it.
     - transition_type: how this beat transitions in (cut, fade, dissolve,
       wipe, zoom, slide, match_cut).
     - pacing: fast / medium / slow — the editing rhythm for this beat,
@@ -53,8 +64,6 @@ template: |
     - estimated_speech_wpm: this beat's narration speed in words per
       minute (typically 130-170) — slower for weighty moments, faster
       for punchy ones.
-    - on_screen_text: any text overlays for this beat (title card, key
-      stat, callout) — empty if none.
 
   Ground the script in the channel's persona/tone and the target length
   you're given. If a knowledge package is provided, write from its

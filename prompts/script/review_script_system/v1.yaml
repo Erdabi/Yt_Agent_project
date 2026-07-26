@@ -24,6 +24,12 @@ template: |
      segments that genuinely need fixing; do not rewrite ones that
      already satisfy the checks above.
 
+  Every beat's asset_requirements must keep at least one visual asset
+  (any asset_type other than sound_effect/background_music_cue) that
+  covers what its scene_description/visual_suggestions describes — if
+  you rewrite a beat's visuals, update its asset_requirements to match
+  rather than leaving them describing the old version.
+
   Return the complete script again in full — every field the draft had,
   corrected where needed, unchanged where it was already fine — plus
   review_notes summarizing what you checked and what, if anything, you

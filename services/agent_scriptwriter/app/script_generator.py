@@ -6,11 +6,11 @@ complete, production-ready script: a strong opening hook, an
 introduction, a deliberately chosen story structure, the main body
 sections, retention techniques woven throughout, an ending, and a call
 to action. Every beat carries voice-over text, a scene description, and
-structured production metadata (camera framing, visual asset type,
-transition, pacing, narration emotion, emphasis words, speech speed,
-on-screen text — see script_schema.py) for the Video Agent's
-storyboard/voiceover modules (services/agent_video) to consume directly,
-without parsing free text.
+structured production metadata (camera framing, a provider-independent
+list of asset requirements, transition, pacing, narration emotion,
+emphasis words, speech speed — see script_schema.py) for the Video
+Agent's storyboard/voiceover modules (services/agent_video) to consume
+directly, without parsing free text.
 
 This module only drafts. `ScriptwriterAgent.run()` (worker.py) always
 runs `script_reviewer.py`'s self-review pass on this draft afterward
@@ -157,4 +157,8 @@ class ScriptGenerator:
         if not tool_use.input["main_sections"]:
             raise ScriptGenerationError("Claude returned a script with no main sections")
 
-        return script_from_dict(tool_use.input)
+        try:
+            return script_from_dict(tool_use.input)
+        except ValueError as exc:
+            logger.error("script_generator_invalid_script", error=str(exc))
+            raise ScriptGenerationError(str(exc)) from exc

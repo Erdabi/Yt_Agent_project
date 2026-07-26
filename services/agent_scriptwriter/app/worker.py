@@ -5,9 +5,9 @@ production-ready script: a strong opening hook, an introduction, a
 deliberately chosen story structure, the main body sections, retention
 techniques woven throughout, an ending, and a call to action — each beat
 carrying voice-over text, a scene description, and structured production
-metadata (camera framing, visual asset type, transition, pacing,
-narration emotion, emphasis words, speech speed, on-screen text). See
-docs/architecture/03-agent-responsibilities.md §3.3.
+metadata (camera framing, a provider-independent list of asset
+requirements, transition, pacing, narration emotion, emphasis words,
+speech speed). See docs/architecture/03-agent-responsibilities.md §3.3.
 
 Loads everything it needs through the Project Context Builder
 (`libs.context.build_project_context`) instead of separately querying the

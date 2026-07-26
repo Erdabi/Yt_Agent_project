@@ -124,13 +124,37 @@ SQL (same reasoning as `Channel.persona_config`):
 | key | type | notes |
 |---|---|---|
 | camera_framing | string | free text (e.g. "wide shot", "close-up", "over-the-shoulder") |
-| visual_asset_type | enum | `stock` / `ai_image` / `ai_video` / `text_overlay` — reuses `libs.models.enums.ShotType`, the same vocabulary `storyboard_shots.shot_type` uses |
+| asset_requirements | object[] | every concrete production asset this beat needs — see below |
 | transition_type | enum | `cut` / `fade` / `dissolve` / `wipe` / `zoom` / `slide` / `match_cut` |
 | pacing | enum | `fast` / `medium` / `slow` — editing rhythm, independent of narration speed |
 | narration_emotion | string | free text (e.g. "curious", "urgent", "reassuring") |
 | emphasis_words | string[] | words/phrases in this beat's `text` worth vocal or caption emphasis |
 | estimated_speech_wpm | int | this beat's own narration speed (80-220), used to derive `estimated_duration_sec` |
-| on_screen_text | string[] | optional text overlays for this beat (title card, key stat, callout) |
+
+`asset_requirements` is a *provider-independent* list — it declares what
+kind of asset a beat needs and what it should contain, never which
+concrete provider/tool supplies it (that's the Video Agent's decision,
+via `libs.providers`, once its modules land). Each entry:
+
+| key | type | notes |
+|---|---|---|
+| asset_type | enum | one of `ai_video`, `ai_image`, `stock_footage`, `animation`, `diagram`, `map`, `portrait`, `text_overlay`, `subtitle_emphasis`, `sound_effect`, `background_music_cue` |
+| description | string | what it should actually show/sound like, in content terms (never a provider/tool name) |
+
+Every beat must have at least one entry whose `asset_type` is a visual
+type (anything except `sound_effect`/`background_music_cue`) — since
+every beat's `scene_description`/`visual_suggestions` always describes a
+visual (both are required fields), it must always have something
+declared to realize it. This is enforced in code
+(`script_schema.py`'s `_validate_asset_coverage`), not just requested in
+the prompt: `script_generator.py` raises `ScriptGenerationError` if a
+draft fails it, `script_reviewer.py` falls back to the prior draft if its
+own revision does.
+
+Distinct from `libs.models.enums.ShotType` (used by
+`storyboard_shots.shot_type`, below): that's the narrower vocabulary a
+future Storyboard module resolves one concrete *visual* shot into, once
+it translates a visual `asset_requirements` entry into an actual asset.
 
 ### `storyboard_shots`
 | column | type | notes |

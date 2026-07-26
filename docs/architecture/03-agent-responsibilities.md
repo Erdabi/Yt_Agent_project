@@ -168,18 +168,39 @@ research; the Research Agent (§3.2) already did that.
     generic "add engaging visuals"), plus structured **production
     metadata** the Video Agent can act on with no further parsing:
     `camera_framing` (free text — "wide shot", "close-up", ...),
-    `visual_asset_type` (reuses `libs.models.enums.ShotType` — the same
-    vocabulary `StoryboardShot.shot_type` already uses, so there's nothing
-    to translate later), `transition_type` (cut/fade/dissolve/wipe/
-    zoom/slide/match_cut), `pacing` (fast/medium/slow — editing rhythm,
-    independent of narration speed), `narration_emotion` (free text —
-    "curious", "urgent", ...), `emphasis_words`, `estimated_speech_wpm`
-    (bounded 80-220 in the tool schema, and clamped again defensively
-    before the worker computes `estimated_duration_sec` from it — never
-    trust an LLM-supplied number for a downstream calculation without a
-    floor/ceiling, same posture as the Manager enforcing its own retry
-    ceiling), and `on_screen_text` (optional overlay text). See
-    `script_schema.py`'s `SegmentProductionMetadata`.
+    `asset_requirements` (see below), `transition_type`
+    (cut/fade/dissolve/wipe/zoom/slide/match_cut), `pacing`
+    (fast/medium/slow — editing rhythm, independent of narration speed),
+    `narration_emotion` (free text — "curious", "urgent", ...),
+    `emphasis_words`, and `estimated_speech_wpm` (bounded 80-220 in the
+    tool schema, and clamped again defensively before the worker computes
+    `estimated_duration_sec` from it — never trust an LLM-supplied number
+    for a downstream calculation without a floor/ceiling, same posture as
+    the Manager enforcing its own retry ceiling). See `script_schema.py`'s
+    `SegmentProductionMetadata`.
+  - **`asset_requirements`** is a structured, *provider-independent* list
+    of every concrete production asset a beat needs — a beat can need
+    more than one at once (e.g. a stock video clip AND a sound effect AND
+    a text overlay). Each entry is an `AssetRequirement`: an `asset_type`
+    (one of eleven values — `ai_video`, `ai_image`, `stock_footage`,
+    `animation`, `diagram`, `map`, `portrait`, `text_overlay`,
+    `subtitle_emphasis`, `sound_effect`, `background_music_cue`) plus a
+    content `description` ("close-up of a chisel bevel at a 25-degree
+    angle") — never which provider or tool should supply it; deciding how
+    to satisfy a requirement is the Video Agent's job (via
+    `libs.providers`), once its modules land, not this agent's. **Every
+    beat must declare at least one visual-category requirement** (any
+    `asset_type` other than `sound_effect`/`background_music_cue`)
+    covering what its `scene_description`/`visual_suggestions` describes
+    — enforced in code (`script_schema.py`'s `_validate_asset_coverage`),
+    not just prompted for, since every beat structurally always describes
+    a visual (both fields are required, non-empty) and a JSON schema
+    alone can't express "and at least one list entry must be one of these
+    enum values." A beat that fails this check makes `script_generator.py`
+    raise `ScriptGenerationError` for an initial draft, or makes
+    `script_reviewer.py` fall back to the prior, already-valid draft for
+    a revision — the same graceful-degradation path any other malformed
+    review response takes.
 
   When the idea has a Knowledge Package, the agent writes from its
   verified facts, timeline, entities, and hooks directly instead of
