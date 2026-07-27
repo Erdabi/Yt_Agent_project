@@ -7,8 +7,13 @@ publish, deployed as Docker Compose services on a single Hetzner Cloud VPS.
 Performance tracking (analytics) runs independently, on its own schedule,
 against already-published videos — it is not a step in that pipeline.
 
-No implementation code is included yet — these documents are the design baseline
-that implementation work will follow.
+These documents are both the original design baseline and the current
+reference for the implementation, which now exists and follows it: the
+Orchestrator, all six worker agents, the provider layer, and the full
+Postgres schema are built and verified end to end (see
+[Development Roadmap](./06-roadmap.md) for exactly what's done vs. still
+planned per phase — each document above is updated as implementation
+work lands, not left to drift from what actually runs).
 
 ## Documents
 

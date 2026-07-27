@@ -1,0 +1,11 @@
+# Test-only dependencies (`pip install -r requirements/test.txt`) — never
+# baked into any service's Docker image, only used to run `pytest` from a
+# checkout. Pulls in the orchestrator's own requirements since that's the
+# only service tests exist for so far (tests/test_channels_api.py,
+# tests/test_orchestrator_read_endpoints.py) — add another service's
+# requirements.txt here too if tests are added against it.
+-r base.txt
+-r ../services/orchestrator/requirements.txt
+
+pytest==8.3.3
+httpx==0.27.2

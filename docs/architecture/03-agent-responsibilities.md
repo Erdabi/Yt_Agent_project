@@ -40,9 +40,14 @@ the `llm_usage_log` table in [Database Design §4.2](./04-database-design.md).
   human review, and which upstream stage a `FAILED_QA` result routes back to.
 - Enforces human-in-the-loop approval gates, driven by per-channel config
   (`require_approval_before_publish: true/false`, etc.) rather than code.
-- Exposes the internal API (`POST /goals`, plus projects/jobs routers) the
-  dashboard and external callers use to submit goals, list projects, view
-  job history, and approve/reject content.
+- Exposes the internal API (`POST /goals`, `POST`/`GET /channels`, plus
+  projects/jobs routers) the dashboard and external callers use to create
+  channels, submit goals, list projects, view job history, and
+  approve/reject content. `POST /channels` is the one channel-scoped
+  write in this API that doesn't go through the Manager at all — a
+  channel is a prerequisite for `receive_goal`, not a pipeline stage — so
+  the route (`services/orchestrator/app/api/channels.py`) writes directly
+  via `libs.core.db.sync_session_scope`.
 - Does **not** run the Analytics Agent's schedule or gate anything on it —
   that runs entirely independently of the Manager (see §3.10). The
   Manager's involvement in a project ends once it reaches `PUBLISHED`.
