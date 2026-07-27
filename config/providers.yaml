@@ -136,21 +136,44 @@ image_gen:
   # and set active: stability.
 
 youtube:
+  # Stays the default here — unlike llm/editor above, publishing to
+  # YouTube is a consequential, hard-to-reverse *public* action, not a
+  # local computation or a text-only reasoning call. It should require
+  # deliberately configuring real OAuth credentials before any real
+  # traffic ever flows, so this follows the video_gen/tts convention
+  # (stay "stub" until a real credential exists) rather than llm/editor's.
+  # Flip to "youtube_data_api" once YOUTUBE_OAUTH_CLIENT_ID,
+  # YOUTUBE_OAUTH_CLIENT_SECRET, and YOUTUBE_OAUTH_REFRESH_TOKEN are all
+  # set, or override per-environment with YOUTUBE_PROVIDER without
+  # touching this file at all.
   active: stub
   providers:
     stub:
-      class: libs.providers.youtube.stub_provider.StubYouTubePublisher
+      class: libs.providers.youtube.stub_provider.StubYouTubeProvider
       config: {}
-  # Real provider (YouTube Data API v3 — Phase 1/3). There's only one real
-  # YouTube, but keeping it behind this interface still lets local dev/tests
-  # use the stub instead of touching the real API and its quota. Add
-  # libs/providers/youtube/data_api_provider.py subclassing YouTubePublisher,
-  # then:
-  #   youtube_data_api:
-  #     class: libs.providers.youtube.data_api_provider.YouTubeDataAPIPublisher
-  #     config: {}
-  #     secret_ref: YOUTUBE_OAUTH_CLIENT_SECRET
-  # and set active: youtube_data_api.
+    # Real, working adapter (libs/providers/youtube/youtube_data_api_provider.py)
+    # against the YouTube Data API v3 — OAuth2 refresh-token flow,
+    # resumable upload, thumbnail/playlist/verify. There's only one real
+    # YouTube, but this still stays behind the same provider interface so
+    # local dev/tests can use the stub instead of touching the real API
+    # and its quota.
+    youtube_data_api:
+      class: libs.providers.youtube.youtube_data_api_provider.YouTubeDataAPIProvider
+      config:
+        # Env var *names* (not values) for the two OAuth credentials that
+        # don't fit the registry's single secret_ref slot below — see
+        # youtube_data_api_provider.py's docstring.
+        client_id_env_var: YOUTUBE_OAUTH_CLIENT_ID
+        refresh_token_env_var: YOUTUBE_OAUTH_REFRESH_TOKEN
+        max_attempts: 3
+        retry_backoff_sec: 2
+        request_timeout_sec: 30
+        upload_timeout_sec: 600
+        dry_run: false
+      # The client *secret* — the one slot this registry mechanism gives
+      # every provider. Client id and refresh token are read directly from
+      # the environment (names above), never through this mechanism.
+      secret_ref: YOUTUBE_OAUTH_CLIENT_SECRET
 
 stock_media:
   active: stub

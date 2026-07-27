@@ -166,6 +166,12 @@ class Settings(BaseSettings):
     # resolve. Same rationale as script_prompt_version/thumbnail_prompt_version.
     qa_prompt_version: str = Field(default="latest", alias="QA_PROMPT_VERSION")
 
+    # --- Publisher Agent: prompt template version ---------------------------
+    # Which version of prompts/publish/refine_metadata_* the Publisher
+    # Agent's MetadataGenerator (services/agent_publisher/app/metadata_generator.py)
+    # resolves. Same rationale as script_prompt_version/thumbnail_prompt_version.
+    publish_prompt_version: str = Field(default="latest", alias="PUBLISH_PROMPT_VERSION")
+
     @computed_field  # type: ignore[misc]
     @property
     def database_url(self) -> str:

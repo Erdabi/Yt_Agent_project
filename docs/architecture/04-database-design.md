@@ -289,16 +289,24 @@ what makes retries, debugging, and observability possible.
 | started_at / finished_at | timestamptz | |
 
 ### `publications`
+Written by the Publisher Agent (03-agent-responsibilities.md §3.9). At
+most one row per project — a retried publish job upserts this same row
+rather than creating a second one.
+
 | column | type | notes |
 |---|---|---|
 | id | uuid PK | |
 | project_id | uuid FK → projects | |
-| youtube_video_id | text | |
-| publish_status | enum | `scheduled`, `published`, `failed` |
-| scheduled_at / published_at | timestamptz | |
-| privacy_status | text | |
-| title / description | text | as actually submitted (may differ from script's working title) |
+| youtube_video_id | varchar(32) | |
+| youtube_channel_id | varchar(64) | self-reported by the Data API response, never assumed from channel config |
+| url | varchar(500) | the watch URL the provider returned alongside the video id |
+| publish_status | enum | `scheduled`, `published`, `failed` — only ever flips to `published` after `verify_upload` confirms a healthy status |
+| scheduled_at / published_at | timestamptz | `scheduled_at` is this project's own requested publish time; `published_at` is YouTube's own (possibly future, possibly absent) visibility-change time |
+| uploaded_at | timestamptz | the Publisher Agent's own wall-clock time when `upload_video` completed — distinct from `published_at` |
+| privacy_status | varchar(20) | `private` / `unlisted` / `public` |
+| title / description | text | as actually submitted (refined by `MetadataGenerator`, may differ from the script's working title) |
 | tags | text[] | |
+| playlist_id | varchar(64) | the real playlist the video was added to, resolved from channel config — never invented by the `youtube` provider itself |
 
 ### `performance_metrics`
 Time-series, one row per publication per day — candidate for monthly range

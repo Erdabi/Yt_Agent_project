@@ -104,7 +104,18 @@ for a single developer, not commitments.
   audio + burned-in captions into a final MP4 — Ken Burns-style motion
   and distinct wipe/slide/zoom/dissolve transitions (today collapsed to
   a plain fade) remain a documented future enhancement, not a blocker.
-- Publisher Agent: manual trigger, no auto-scheduling.
+- **Done** — Publisher Agent (`PublisherAgent`,
+  services/agent_publisher/app/publisher_agent.py): refines title/
+  description/tags/playlist via `MetadataGenerator`, uploads the video
+  and thumbnail through the `youtube` Provider Registry capability,
+  verifies the upload before marking a project published, and persists
+  every required field onto `publications` — see
+  [Agent Responsibilities §3.9](./03-agent-responsibilities.md#39-publisher-agent).
+  The real adapter (`libs/providers/youtube/youtube_data_api_provider.py`)
+  exists alongside the stub, but `youtube.active` stays `stub` until real
+  OAuth credentials are configured — manual trigger (via a job payload),
+  no auto-scheduling beyond an explicit `publish_at` override, matching
+  this phase's "manual, human-in-the-loop" posture.
 - A human approval checkpoint at **every** stage transition (safest possible
   starting posture).
 
@@ -141,9 +152,14 @@ dashboard; a simulated provider outage demonstrably fails over.
 
 ## Phase 3 — Publishing automation & analytics (~2 weeks)
 
-- Auto-publish path: the manual-approval gate becomes a config toggle,
-  disabled once trust in QA is established (can be re-enabled per channel at
-  any time).
+- **Done** — the Publisher Agent itself (upload, thumbnail, playlist,
+  verify, idempotent retry, dry-run mode) — see Phase 1 above and
+  [Agent Responsibilities §3.9](./03-agent-responsibilities.md#39-publisher-agent).
+  What remains here is the *auto*-publish path: the manual-approval gate
+  becomes a config toggle, disabled once trust in QA is established (can
+  be re-enabled per channel at any time) — the Publisher Agent already
+  runs unattended once dispatched, this is about the Manager no longer
+  waiting on a human before dispatching it.
 - Analytics Agent: its independent scheduling (Celery beat sweep of
   `PUBLISHED` projects, decoupled from the Manager) already exists as of
   the video-consolidation refactor — this phase adds the real YouTube

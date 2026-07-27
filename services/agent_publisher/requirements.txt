@@ -1,4 +1,13 @@
 -r ../../requirements/base.txt
 
-# No agent-specific dependencies yet — added when this agent's real
-# provider/library integration lands (see docs/architecture/06-roadmap.md).
+# libs/providers/youtube/youtube_data_api_provider.py's real YouTube Data
+# API v3 adapter — OAuth2 token refresh + resumable upload, both raw HTTP
+# calls, same style as libs/providers/video_gen/runway_provider.py (no
+# vendor SDK, e.g. google-api-python-client).
+requests==2.32.3
+
+# get_provider("llm") (metadata_generator.py) dynamically imports
+# libs/providers/llm/anthropic_provider.py, which imports this package at
+# module load time — needed transitively in this container even though
+# this agent never imports `anthropic` itself.
+anthropic==0.120.0

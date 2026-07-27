@@ -29,10 +29,11 @@ yt-agent/
 │   │           review_script_system/, review_script_user/}
 │   ├── video/storyboard_shot_planning/
 │   ├── thumbnail/{generate_concepts_system/, generate_concepts_user/}
-│   └── qa/{script_review_system/, script_review_user/,
-│           video_review_system/, video_review_user/,
-│           thumbnail_review_system/, thumbnail_review_user/,
-│           policy_review/}                        # policy_review/ is still an unwired draft
+│   ├── qa/{script_review_system/, script_review_user/,
+│   │       video_review_system/, video_review_user/,
+│   │       thumbnail_review_system/, thumbnail_review_user/,
+│   │       policy_review/}                        # policy_review/ is still an unwired draft
+│   └── publish/{refine_metadata_system/, refine_metadata_user/}
 │
 ├── services/                         # one folder per deployable container
 │   ├── orchestrator/
@@ -101,10 +102,15 @@ yt-agent/
 │   │           ├── subtitle_reviewer.py  # timing/readability/overlap/missing captions — deterministic only
 │   │           └── thumbnail_reviewer.py # readability/title visibility/branding/click potential — vision LLM call
 │   │
-│   ├── agent_publisher/
-│   │   └── app/{worker.py, youtube_upload.py, oauth_token_manager.py, quota_guard.py}
+│   ├── agent_publisher/               # implemented — see 03-agent-responsibilities.md §3.9
+│   │   └── app/
+│   │       ├── worker.py             # Celery task entrypoint (queue: publish)
+│   │       ├── publisher_agent.py    # PublisherAgent: gathers script/render/thumbnail, refines
+│   │       │                         # metadata, uploads+thumbnail+playlist+verify, persists publications
+│   │       └── metadata_generator.py # MetadataGenerator: get_provider("llm") forced tool call ->
+│   │                                 # refined title/description/tags/suggested_playlist_theme
 │   │
-│   ├── agent_analytics/              # NOT dispatched by the Manager — see 03-agent-responsibilities.md §3.9
+│   ├── agent_analytics/              # NOT dispatched by the Manager — see 03-agent-responsibilities.md §3.10
 │   │   └── app/
 │   │       ├── worker.py             # AnalyticsAgent + the sweep task + its own beat_schedule
 │   │       ├── youtube_analytics_client.py
@@ -132,7 +138,7 @@ yt-agent/
 │   │   ├── audio_library/{base.py, stub_provider.py}  # AudioLibraryProvider.search() — sound effects/music cues
 │   │   ├── editor/{base.py, stub_provider.py, ffmpeg_provider.py, profiles.py}  # compositor — ffmpeg_provider.py is real, not a stub (no vendor account needed); profiles.py loads config/render_profiles.yaml (resolution/fps/loudness/crossfade/subtitle-size bundles, one per output format)
 │   │   ├── llm/{base.py, stub_provider.py, anthropic_provider.py}  # forced-tool-use "generate_tool_call" — anthropic_provider.py is real and the default (active: anthropic, not stub — see its own docstring for why); first real consumer is the Quality Control Agent's reviewers (services/agent_qa/app/reviewers/)
-│   │   └── youtube/{base.py, stub_provider.py}
+│   │   └── youtube/{base.py, stub_provider.py, youtube_data_api_provider.py}  # youtube_data_api_provider.py is real (OAuth2 refresh-token flow + resumable upload against the Data API v3); active stays stub until real credentials are configured
 │   │
 │   ├── storage/                      # centralized asset storage, keyed by project id
 │   │   ├── base.py                   # StorageBackend interface

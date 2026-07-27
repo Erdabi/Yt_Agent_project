@@ -2,7 +2,7 @@
 
 `Provider` carries no capability behavior of its own — each real
 capability contract (`VideoGenProvider`, `TTSProvider`, `ImageGenProvider`,
-`YouTubePublisher`) lives in its own subfolder's `base.py`. This shared
+`YouTubeProvider`) lives in its own subfolder's `base.py`. This shared
 marker exists so `registry.py`'s dynamic import can verify "is this
 actually a provider class" before instantiating whatever
 `config/providers.yaml` names, rather than blindly calling into an

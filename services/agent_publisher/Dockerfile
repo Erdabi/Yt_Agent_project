@@ -10,10 +10,14 @@ COPY services/agent_publisher/requirements.txt services/agent_publisher/requirem
 RUN pip install --no-cache-dir -r services/agent_publisher/requirements.txt
 
 COPY libs/ libs/
-# config/providers.yaml (libs/providers/registry.py — the `youtube`
-# capability). No prompts/ here: publishing is YouTube Data API
-# mechanics, not an LLM call, so this agent has no prompt to load.
+# config/providers.yaml (libs/providers/registry.py — the `youtube` and
+# `llm` capabilities). prompts/ is needed too now: metadata_generator.py
+# renders prompts/publish/refine_metadata_{system,user}/ for its one LLM
+# call (title/description/tags/playlist-theme refinement) — the rest of
+# this agent's work (upload, thumbnail, playlist, verify) is YouTube Data
+# API mechanics with no prompt of its own.
 COPY config/ config/
+COPY prompts/ prompts/
 COPY services/agent_publisher/app app/
 
 ENV PYTHONPATH=/app \

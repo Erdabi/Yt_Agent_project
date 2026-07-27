@@ -1,0 +1,29 @@
+template: |
+  Working title: {{ video_title }}
+  Channel niche: {{ channel_niche }}
+  Channel persona / tone: {{ channel_persona }}
+  {% if target_audience %}Target audience: {{ target_audience }}
+  {% endif %}
+  {% if suggested_angle %}Creative angle: {{ suggested_angle }}
+  {% endif %}
+  {% if research_keywords %}Research keywords: {{ research_keywords | join(", ") }}
+  {% endif %}
+  {% if draft_description %}Draft description:
+  """
+  {{ draft_description }}
+  """
+  {% endif %}
+  Full script:
+  """
+  {{ script_content }}
+  """
+
+  Refine this video's publish metadata: title, description, tags, and a
+  suggested playlist theme.
+metadata:
+  description: >
+    Per-call context for the Publisher Agent's metadata-refinement call
+    (services/agent_publisher/app/metadata_generator.py). Variables:
+    video_title, channel_niche, channel_persona, target_audience,
+    suggested_angle, research_keywords, draft_description, script_content.
+  owner: publisher-agent

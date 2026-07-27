@@ -22,6 +22,14 @@ class Publication(Base, UUIDPrimaryKeyMixin):
         index=True,
     )
     youtube_video_id: Mapped[str | None] = mapped_column(String(32))
+    #: Self-reported by the YouTube Data API response, never assumed from
+    #: channel configuration — see libs/providers/youtube/base.py's
+    #: `UploadResult.channel_id`.
+    youtube_channel_id: Mapped[str | None] = mapped_column(String(64))
+    #: The watch URL the Publisher Agent's provider returned alongside
+    #: `youtube_video_id` — stored so nothing downstream has to
+    #: reconstruct it from the video id.
+    url: Mapped[str | None] = mapped_column(String(500))
     publish_status: Mapped[PublishStatus] = mapped_column(
         Enum(PublishStatus, name="publish_status", native_enum=True),
         nullable=False,
@@ -29,10 +37,18 @@ class Publication(Base, UUIDPrimaryKeyMixin):
     )
     scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    #: When the Publisher Agent's `upload_video` call completed — distinct
+    #: from `published_at`, which is YouTube's own (possibly future,
+    #: possibly still-absent) visibility-change time.
+    uploaded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     privacy_status: Mapped[str | None] = mapped_column(String(20))
     title: Mapped[str | None] = mapped_column(String(500))
     description: Mapped[str | None] = mapped_column(String)
     tags: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list)
+    #: The playlist the video was actually added to, resolved by the
+    #: Publisher Agent from channel configuration or a job override — the
+    #: provider itself never invents this (see `VideoMetadata.playlist_id`).
+    playlist_id: Mapped[str | None] = mapped_column(String(64))
 
     project: Mapped["Project"] = relationship(back_populates="publication")
     performance_metrics: Mapped[list["PerformanceMetric"]] = relationship(

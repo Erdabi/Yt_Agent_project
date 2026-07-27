@@ -763,16 +763,102 @@ whatever fields of the already-gathered `ReviewInput` it needs.
 
 ## 3.9 Publisher Agent
 
-- **Input:** an approved, QA-passed project.
-- **Does:** manages YouTube OAuth2 token refresh, performs the resumable
-  upload via the YouTube Data API v3, sets title/description/tags/category/
-  playlist/captions file, uploads the selected thumbnail, and schedules or
-  immediately publishes per config. Tracks the Data API's daily quota and
-  paces uploads to stay under it.
-- **Output:** a `publications` row with the returned `youtube_video_id`.
-- **Failure mode:** every upload attempt is keyed by the project's job id so a
-  retried job upserts rather than re-uploads — a duplicate publish is treated
-  as a correctness bug, not an acceptable retry side effect.
+One agent, one queue (`publish`), one `ProjectStage` (`PUBLISHING`) —
+`PublisherAgent` (services/agent_publisher/app/publisher_agent.py)
+refines a project's publish metadata, uploads the finished video and its
+selected thumbnail to YouTube through the `youtube` Provider Registry
+capability, verifies the upload actually succeeded, and persists
+everything onto that project's `publications` row.
+
+- **Input:** gathered once by `PublisherAgent._gather` — the channel
+  profile and research summary via `ProjectContext`
+  (`libs.context.build_project_context`); the latest `Script`'s content,
+  the latest `Render` asset, and the `is_selected` `Thumbnail` asset via
+  direct queries (none of this is part of `ProjectContext`, the same
+  scoping decision `QualityControlAgent._gather` already makes, §3.8);
+  the video and thumbnail bytes themselves, read from storage; and
+  whatever `Publication` row already exists for this project, if any
+  (the idempotency check below). Missing a render or a selected
+  thumbnail fails the job immediately with a `LookupError`, before any
+  YouTube API call is attempted — there is nothing to publish without
+  both.
+- **Does:**
+  1. **Refines metadata** via `MetadataGenerator`
+     (services/agent_publisher/app/metadata_generator.py) — the agent's
+     only LLM call, routed through `libs.providers.get_provider("llm")`
+     (the same Provider Registry capability the Quality Control Agent's
+     reviewers use, §3.8) rather than a hardcoded `anthropic` import. One
+     forced tool call (`refine_publish_metadata`) returns a refined
+     title, description, tags, and a playlist *theme* suggestion (e.g.
+     "beginner python tutorials") — never a real playlist ID, since the
+     model has no way to know which playlists actually exist on the
+     channel. A provider failure (bad key, refusal, malformed response)
+     is never caught and turned into a fabricated title — it propagates
+     as a genuine job failure, the same no-fallback rule every other
+     LLM-backed generator in this codebase follows.
+  2. **Resolves privacy, scheduling, and playlist** from three sources,
+     highest precedence first: an explicit override in the job's
+     payload (`privacy_status`, `publish_at`, `playlist_id`) — the hook
+     for a human- or Manager-driven one-off decision; the channel's own
+     `persona_config` (`default_privacy_status`, `default_playlist_id`,
+     a `playlist_theme_map` mapping the LLM's suggested theme to a real
+     playlist ID, `youtube_category_id`); finally a safe hardcoded
+     default (`"private"`, no playlist). The resolved playlist ID is
+     never invented by the `youtube` provider itself — see
+     libs/providers/youtube/base.py's `VideoMetadata.playlist_id`.
+  3. **Uploads** the video and thumbnail, and adds the video to a
+     playlist if one resolved, through whichever `YouTubeProvider` is
+     configured (`libs.providers.get_provider("youtube")`) — never a
+     hardcoded vendor class. `config/providers.yaml`'s
+     `youtube_data_api` entry (`libs/providers/youtube/youtube_data_api_provider.py`)
+     is the real, working adapter against the YouTube Data API v3:
+     OAuth2 refresh-token exchange (access tokens cached in memory for
+     this process only, never written to disk/DB/logs — only the
+     refresh token, read from configuration/environment, is a durable
+     secret), the Data API's real resumable-upload protocol (resuming
+     from the exact byte offset YouTube reports it actually received on
+     a network interruption, not a blind full-file retry), and typed
+     errors distinguishing auth failures, quota exhaustion (`403`
+     `quotaExceeded`/`dailyLimitExceeded`/`rateLimitExceeded` — a "come
+     back on a longer horizon" signal, never retried in-process), and
+     every other upload failure. `youtube.active` stays `stub` by
+     default (unlike `llm`/`editor`) — publishing to a real channel is a
+     consequential, hard-to-reverse *public* action, so it requires
+     deliberately configuring real OAuth credentials
+     (`YOUTUBE_OAUTH_CLIENT_ID`/`_CLIENT_SECRET`/`_REFRESH_TOKEN`) first.
+     `dry_run` (a provider-level default, overridable per job via the
+     payload) makes every provider call a no-op that returns a
+     synthetic result, for testing the whole pipeline without any real
+     upload.
+  4. **Verifies** the upload via `verify_upload` — a fresh read of the
+     video's own `status.uploadStatus`/`privacyStatus` from YouTube,
+     never trusting `upload_video`'s own return value as the last word.
+     A project is only ever marked published *after* this call reports
+     a healthy status; `"failed"`/`"rejected"` fails the job exactly
+     like any other provider error.
+- **Output:** one `publications` row per project (`libs/models/publication.py`)
+  with every field this stage is responsible for: `youtube_video_id`,
+  `publish_status` (`SCHEDULED`/`PUBLISHED`/`FAILED`), `privacy_status`,
+  `youtube_channel_id` and `url` (both self-reported by the API, never
+  assumed), `scheduled_at`/`published_at`, `uploaded_at` (this agent's
+  own wall-clock time, distinct from YouTube's own possibly-future
+  `published_at`), and the `title`/`description`/`tags`/`playlist_id`
+  actually used.
+- **Failure mode — idempotent retry, not re-upload:** every project has
+  at most one `Publication` row. If a prior, partially-completed attempt
+  already recorded a `youtube_video_id` (persisted immediately after a
+  successful upload, before the thumbnail/playlist/verify steps even
+  run), a retried job skips the upload entirely and resumes from
+  wherever it left off against that same video — a duplicate publish is
+  treated as a correctness bug, not an acceptable retry side effect. The
+  playlist addition is persisted the moment it succeeds too, so a later
+  step failing (e.g. `verify_upload`) doesn't cause a retry to add the
+  video to the same playlist twice. The one residual gap — this process
+  crashing in the narrow window between the playlist API call
+  succeeding and that immediate DB write — is an accepted, documented
+  tradeoff (no distributed transaction across the YouTube API and
+  Postgres), not a fixable bug.
+- **Prompts:** `prompts/publish/refine_metadata_{system,user}/`.
 
 ## 3.10 Analytics / Performance Tracking Agent
 
