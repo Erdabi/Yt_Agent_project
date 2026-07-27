@@ -95,18 +95,43 @@ class SubtitleReviewer(Reviewer):
         return build_review_result(_CATEGORY, summary, issues)
 
     @staticmethod
-    def _cues_for_segment(segment: SegmentData, cumulative_offset: float) -> list[_DerivedCue]:
+    def _word_timings(segment: SegmentData) -> list[tuple[str, float, float]]:
+        """Mirrors services/agent_video/app/modules/subtitle_generation.py's
+        `_word_timings` fallback exactly: a provider's real per-word
+        timing when Voice Generation captured it, otherwise an even split
+        of the segment's known voiceover duration across its words. A TTS
+        provider that doesn't return word-level timestamps is an
+        explicitly supported configuration (docs/architecture/
+        05-technology-choices.md §5.6's captions row), not an error state
+        — without this fallback this reviewer reported a false "no
+        subtitle cues at all" for every segment whenever it was used,
+        even though real cues were burned into the render.
+        """
         word_timings = segment.voiceover.word_timings if segment.voiceover else []
+        if word_timings:
+            return [(wt.word, wt.start_sec, wt.end_sec) for wt in word_timings]
+
+        if segment.voiceover is None:
+            return []
+        words = segment.text.split()
+        if not words:
+            return []
+        per_word = segment.voiceover.duration_sec / len(words)
+        return [(word, index * per_word, (index + 1) * per_word) for index, word in enumerate(words)]
+
+    @staticmethod
+    def _cues_for_segment(segment: SegmentData, cumulative_offset: float) -> list[_DerivedCue]:
+        words_with_timing = SubtitleReviewer._word_timings(segment)
         cues: list[_DerivedCue] = []
-        for chunk_start in range(0, len(word_timings), _MAX_WORDS_PER_CUE):
-            chunk = word_timings[chunk_start : chunk_start + _MAX_WORDS_PER_CUE]
+        for chunk_start in range(0, len(words_with_timing), _MAX_WORDS_PER_CUE):
+            chunk = words_with_timing[chunk_start : chunk_start + _MAX_WORDS_PER_CUE]
             if not chunk:
                 continue
             cues.append(
                 _DerivedCue(
                     segment_order_index=segment.order_index,
-                    start_sec=cumulative_offset + chunk[0].start_sec,
-                    end_sec=cumulative_offset + chunk[-1].end_sec,
+                    start_sec=cumulative_offset + chunk[0][1],
+                    end_sec=cumulative_offset + chunk[-1][2],
                     word_count=len(chunk),
                 )
             )
