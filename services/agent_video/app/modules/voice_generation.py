@@ -22,6 +22,9 @@ so it's durably queryable per project — not just cached transiently for
 reuse.
 """
 
+import os
+import subprocess
+import tempfile
 from uuid import UUID
 
 from libs.core.db import sync_session_scope
@@ -35,6 +38,11 @@ from ..asset_cache import AssetCache, AssetCacheKey
 from ..pipeline_schema import SegmentInput, VoiceSegment
 
 logger = get_logger(__name__)
+
+#: Bounds a single ffprobe invocation measuring one segment's synthesized
+#: audio — generously large for what is always a single short narration
+#: clip, never a full render.
+_FFPROBE_TIMEOUT_SEC = 30
 
 #: Voice Generation's asset-type identity for the cache — narration isn't
 #: one of the Script Agent's own `AssetType` values, so it gets its own
@@ -83,15 +91,16 @@ class VoiceGenerationModule:
             if result.word_timings:
                 duration_sec = result.word_timings[-1].end_sec
             else:
-                # No provider-supplied timing: fall back to the Script
-                # Agent's own per-beat pacing estimate
-                # (production_metadata.estimated_speech_wpm), the same
-                # figure ScriptwriterAgent.run() already used for
-                # ScriptSegment.estimated_duration_sec — reusing it here
-                # keeps the two estimates consistent instead of computing
-                # pacing two different ways.
-                word_count = len(segment.text.split())
-                duration_sec = (word_count / segment.production.estimated_speech_wpm) * 60
+                # No provider-supplied timing: measure the real audio
+                # bytes the provider returned rather than trusting the
+                # Script Agent's pre-production pacing guess
+                # (estimated_speech_wpm) — an estimate made before any
+                # audio existed can diverge from the provider's actual
+                # speaking pace, and Rendering hard-trims/pads each
+                # segment's audio to whatever duration_sec is reported
+                # here, so an estimate that's too short silently
+                # truncates real narration.
+                duration_sec = _measure_audio_duration_sec(result.audio_bytes)
 
             word_timings = result.word_timings
             model = result.model
@@ -152,6 +161,35 @@ class VoiceGenerationModule:
             word_timings=word_timings,
             provider_name=provider_name,
         )
+
+
+def _measure_audio_duration_sec(audio_bytes: bytes) -> float:
+    """ffprobes a synthesized narration clip's real duration — used as
+    the fallback whenever a TTS provider doesn't return word-level
+    timing (see `_synthesize_one`). `ffmpeg`/`ffprobe` are already a
+    hard dependency of this service (see rendering.py's editor
+    provider), so this reuses the same binary rather than adding a new
+    one.
+    """
+    with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
+        f.write(audio_bytes)
+        path = f.name
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe", "-v", "error", "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1", path,
+            ],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=_FFPROBE_TIMEOUT_SEC,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"ffprobe failed to measure synthesized narration duration: "
+                f"{result.stderr.decode('utf-8', errors='replace')}"
+            )
+        return float(result.stdout.decode("utf-8").strip())
+    finally:
+        os.unlink(path)
 
 
 def _word_timings_to_metadata(word_timings: list[WordTiming] | None) -> list[dict] | None:
