@@ -29,7 +29,10 @@ yt-agent/
 │   │           review_script_system/, review_script_user/}
 │   ├── video/storyboard_shot_planning/
 │   ├── thumbnail/{generate_concepts_system/, generate_concepts_user/}
-│   └── qa/policy_review/
+│   └── qa/{script_review_system/, script_review_user/,
+│           video_review_system/, video_review_user/,
+│           thumbnail_review_system/, thumbnail_review_user/,
+│           policy_review/}                        # policy_review/ is still an unwired draft
 │
 ├── services/                         # one folder per deployable container
 │   ├── orchestrator/
@@ -82,8 +85,21 @@ yt-agent/
 │   │           ├── timeline_building.py   # cumulative absolute timing + final assembly — no provider calls
 │   │           └── rendering.py           # builds a render plan, then calls the editor provider to composite it
 │   │
-│   ├── agent_qa/
-│   │   └── app/{worker.py, technical_checks.py, policy_review.py}
+│   ├── agent_qa/                      # implemented — see 03-agent-responsibilities.md §3.8
+│   │   └── app/
+│   │       ├── worker.py             # Celery task entrypoint (queue: qa)
+│   │       ├── quality_control_agent.py  # QualityControlAgent: gathers ReviewInput once, runs every
+│   │       │                             # reviewer, aggregates APPROVED/REJECTED, persists qa_reports
+│   │       ├── qa_schema.py           # Issue/ReviewResult/ReviewInput + gathered production-data types
+│   │       ├── media_inspection.py    # shared ffprobe/ffmpeg helpers (probe/decode/silence/black-frame/peak-level)
+│   │       ├── llm_review.py          # shared "report issues" tool + get_provider("llm") + track_llm_call wrapper
+│   │       └── reviewers/
+│   │           ├── base.py               # the Reviewer interface every reviewer implements
+│   │           ├── script_reviewer.py    # completeness/repetition (deterministic) + factual/quality/engagement/grammar (LLM)
+│   │           ├── video_reviewer.py     # assets/order/rendering/duration (deterministic) + visual consistency/transitions (LLM)
+│   │           ├── audio_reviewer.py     # narration/clipping/silence/timing/sync — deterministic only
+│   │           ├── subtitle_reviewer.py  # timing/readability/overlap/missing captions — deterministic only
+│   │           └── thumbnail_reviewer.py # readability/title visibility/branding/click potential — vision LLM call
 │   │
 │   ├── agent_publisher/
 │   │   └── app/{worker.py, youtube_upload.py, oauth_token_manager.py, quota_guard.py}
@@ -115,6 +131,7 @@ yt-agent/
 │   │   ├── stock_media/{base.py, stub_provider.py}    # StockMediaProvider.search() — stock footage/photos
 │   │   ├── audio_library/{base.py, stub_provider.py}  # AudioLibraryProvider.search() — sound effects/music cues
 │   │   ├── editor/{base.py, stub_provider.py, ffmpeg_provider.py, profiles.py}  # compositor — ffmpeg_provider.py is real, not a stub (no vendor account needed); profiles.py loads config/render_profiles.yaml (resolution/fps/loudness/crossfade/subtitle-size bundles, one per output format)
+│   │   ├── llm/{base.py, stub_provider.py, anthropic_provider.py}  # forced-tool-use "generate_tool_call" — anthropic_provider.py is real and the default (active: anthropic, not stub — see its own docstring for why); first real consumer is the Quality Control Agent's reviewers (services/agent_qa/app/reviewers/)
 │   │   └── youtube/{base.py, stub_provider.py}
 │   │
 │   ├── storage/                      # centralized asset storage, keyed by project id

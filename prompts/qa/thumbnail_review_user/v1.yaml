@@ -1,0 +1,20 @@
+template: |
+  Video title: {{ video_title }}
+  Channel style guide: {{ style_guide_summary }}
+  {% if concept_name %}Concept name: {{ concept_name }}
+  {% endif %}
+  {% if overlay_text %}On-image overlay text (composited separately, not drawn by the image model): {{ overlay_text }}
+  {% endif %}
+  {% if image_prompt %}Original image-generation prompt: {{ image_prompt }}
+  {% endif %}
+
+  The rendered thumbnail image is attached. Review it now.
+metadata:
+  description: >
+    Per-call context for the Quality Control Agent's ThumbnailReviewer
+    (services/agent_qa/app/reviewers/thumbnail_reviewer.py). Variables:
+    video_title, style_guide_summary, concept_name, overlay_text,
+    image_prompt. The actual image bytes travel as a separate vision
+    content block (`LLMProvider.generate_tool_call(images=...)`), not a
+    template variable.
+  owner: qa-agent

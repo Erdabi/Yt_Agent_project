@@ -160,6 +160,12 @@ class Settings(BaseSettings):
     # already support more than one row per project).
     thumbnail_render_count: int = Field(default=1, alias="THUMBNAIL_RENDER_COUNT")
 
+    # --- Quality Control Agent: prompt template version ---------------------
+    # Which version of prompts/qa/{script,video,thumbnail}_review_* the
+    # Quality Control Agent's reviewers (services/agent_qa/app/reviewers/)
+    # resolve. Same rationale as script_prompt_version/thumbnail_prompt_version.
+    qa_prompt_version: str = Field(default="latest", alias="QA_PROMPT_VERSION")
+
     @computed_field  # type: ignore[misc]
     @property
     def database_url(self) -> str:

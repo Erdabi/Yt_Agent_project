@@ -1,0 +1,32 @@
+template: |
+  Video title: {{ video_title }}
+  Channel niche: {{ channel_niche }}
+  Channel persona / tone: {{ channel_persona }}
+  {% if target_audience %}Target audience: {{ target_audience }}
+  {% endif %}
+  {% if suggested_angle %}Intended creative angle: {{ suggested_angle }}
+  {% endif %}
+  {% if research_notes %}Research notes: {{ research_notes }}
+  {% endif %}
+  {% if knowledge_package_summary %}Deep-research summary this script should be grounded in:
+  {{ knowledge_package_summary }}
+  {% endif %}
+  {% if verified_facts %}Verified facts available to the writer:
+  {% for fact in verified_facts %}- {{ fact }}
+  {% endfor %}
+  {% endif %}
+
+  Full script:
+  """
+  {{ script_content }}
+  """
+
+  Review this script now.
+metadata:
+  description: >
+    Per-call context for the Quality Control Agent's ScriptReviewer
+    (services/agent_qa/app/reviewers/script_reviewer.py). Variables:
+    video_title, channel_niche, channel_persona, target_audience,
+    suggested_angle, research_notes, knowledge_package_summary,
+    verified_facts, script_content.
+  owner: qa-agent

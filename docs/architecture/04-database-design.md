@@ -252,13 +252,22 @@ own freshly produced bytes are already valid to use regardless of which
 worker's index row wins.
 
 ### `qa_reports`
+Written by the Quality Control Agent
+(`services/agent_qa/app/quality_control_agent.py`,
+[Agent Responsibilities §3.8](./03-agent-responsibilities.md#38-quality-control-agent))
+— one row per inspection, aggregating five independent reviewers'
+verdicts into a single `passed` (APPROVED/REJECTED at the API layer;
+stored as a plain boolean here, the same "no separate enum for a
+derived yes/no" reasoning already used elsewhere in this schema).
+
 | column | type | notes |
 |---|---|---|
 | id | uuid PK | |
 | project_id | uuid FK → projects | |
-| stage | text | which stage's output was checked |
-| passed | boolean | |
-| issues | jsonb | itemized list: `{category, severity, detail}` |
+| stage | text | which stage's output was checked (`qa_review` today) |
+| passed | boolean | `false` if any category's issues include a `high` severity one |
+| issues | jsonb | itemized list: `{category, severity, detail, suggested_fix}` — the Orchestrator reads `category` to decide which upstream stage a failure routes back to |
+| metadata | jsonb | per-reviewer summary: `{"reviewers": {"<category>": {"passed", "summary", "issue_count"}, ...}}` — added in migration `50a8aa4a70f4`, the same "thin typed columns + one JSONB metadata blob" split every other table here uses |
 | checked_at | timestamptz | |
 
 ### `jobs`

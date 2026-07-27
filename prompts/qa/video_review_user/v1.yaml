@@ -1,0 +1,21 @@
+template: |
+  Video title: {{ video_title }}
+  Channel style guide: {{ style_guide_summary }}
+
+  Segment-by-segment shot plan, in order:
+  {% for segment in segments %}
+  Segment {{ segment.order_index }} ({{ segment.segment_type }}): "{{ segment.text }}"
+    Camera framing: {{ segment.camera_framing }}
+    Transition in: {{ segment.transition_type }}
+    Pacing: {{ segment.pacing }}
+    Planned shots: {% if segment.shots %}{% for shot in segment.shots %}[{{ shot.shot_type }}: {{ shot.prompt_or_query }}]{% if not loop.last %}, {% endif %}{% endfor %}{% else %}none{% endif %}
+  {% endfor %}
+
+  Review this video's planned visual treatment now.
+metadata:
+  description: >
+    Per-call context for the Quality Control Agent's VideoReviewer
+    (services/agent_qa/app/reviewers/video_reviewer.py). Variables:
+    video_title, style_guide_summary, segments (each with order_index,
+    segment_type, text, camera_framing, transition_type, pacing, shots).
+  owner: qa-agent

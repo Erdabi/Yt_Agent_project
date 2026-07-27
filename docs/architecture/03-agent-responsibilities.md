@@ -663,23 +663,103 @@ anything Rendering produces. Runs after Rendering anyway to keep
 - **Prompts:** `prompts/thumbnail/generate_concepts_system/`,
   `prompts/thumbnail/generate_concepts_user/`.
 
-## 3.8 Quality Assurance Agent
+## 3.8 Quality Control Agent
 
-- **Input:** the fully rendered video, thumbnail, and script.
-- **Does:** runs automated technical checks (audio/video sync drift, silence
-  gaps, duration within target range, resolution/aspect ratio, loudness spec,
-  corrupt/black-frame detection) and an LLM-based content-policy review against
-  YouTube monetization/community guidelines (flagging medical, violence, or
-  misinformation risk) to reduce demonetization/strike risk before anything is
-  published.
-- **Output:** a `qa_reports` row (pass/fail + itemized issues).
-- **Failure mode:** on fail, the report's issue category determines which
-  upstream stage the Manager routes back to (e.g. sync drift or audio
-  issues → `VIDEO_CREATION`, since voice-over/assembly are now internal
-  modules of that one stage rather than separately addressable stages;
-  policy flag → `SCRIPTING`), bounded by the project's `retry_count`.
-- **Prompt:** `prompts/qa/policy_review/` (draft — not wired into real code
-  yet, see §6 Phase 2).
+One agent, one queue (`qa`), one `ProjectStage` (`QA_REVIEW`) —
+`QualityControlAgent` (services/agent_qa/app/quality_control_agent.py)
+inspects a project's entire finished production and decides whether it's
+ready to publish. It coordinates five specialized, independent
+reviewers (services/agent_qa/app/reviewers/) rather than putting all
+evaluation logic in one class — each reviewer owns exactly one category
+and knows nothing about any other reviewer or about persistence:
+
+| Reviewer | Category | Deterministic checks | LLM-judged checks |
+|---|---|---|---|
+| `ScriptReviewer` | script | completeness (has a hook + an ending/CTA), exact-duplicate repetition | factual consistency, quality, engagement, non-exact repetition, grammar, alignment with research |
+| `VideoReviewer` | video | missing assets, incorrect scene order, rendering problems (corrupt decode, black frames), video duration | visual consistency and transition/pacing appropriateness (text-only — no video-frame vision capability is wired in) |
+| `AudioReviewer` | audio | missing narration, clipping, silence, timing mismatches, synchronization — all measured directly against the real render's audio track | *(none — every check here is objectively measurable; see the module's own docstring for why that's a deliberate choice)* |
+| `SubtitleReviewer` | subtitles | timing, readability, overlap, missing captions — re-derived from persisted word timings, since burned-in subtitles are never themselves persisted (see below) | *(none, same reasoning as AudioReviewer)* |
+| `ThumbnailReviewer` | thumbnail | *(none)* | readability, title/text visibility, branding consistency, click potential — the **only** reviewer that sends the actual rendered image (not just its generation metadata) to the model, a real multimodal review |
+
+- **Input:** gathered once by `QualityControlAgent._gather` and handed
+  to every reviewer as one immutable `ReviewInput`
+  (services/agent_qa/app/qa_schema.py) — project metadata and research
+  summary via `ProjectContext` (`libs.context.build_project_context`);
+  the script and every segment's production metadata, resolved
+  storyboard shots, and voiceover (with word timings) via direct
+  `Script`/`ScriptSegment`/`StoryboardShot`/`Voiceover`/`Asset` queries
+  (script content isn't part of `ProjectContext` — it predates any
+  script existing for most of that object's other consumers, see
+  libs/context/schema.py); the render and selected thumbnail, downloaded
+  from storage once (the render to a temp file for
+  `VideoReviewer`/`AudioReviewer`'s ffprobe/ffmpeg commands, the
+  thumbnail into memory for `ThumbnailReviewer`'s vision call).
+  Subtitle cues are never persisted (the Video Agent's Subtitle
+  Generation module computes them in-memory and burns them straight into
+  the render — see that module's own docstring), so `SubtitleReviewer`
+  re-derives them from the same already-persisted word timings using an
+  identical, deliberately duplicated chunking rule (a small, bounded
+  duplication across the services/agent_qa ↔ services/agent_video
+  container boundary — see that reviewer's own docstring for why that's
+  the right tradeoff over a cross-service import).
+- **Does:** runs every reviewer against the same `ReviewInput`, then
+  aggregates their independent verdicts — a category fails if any of its
+  issues is `high` severity (`qa_schema.build_review_result`); the whole
+  project is `APPROVED` only if every category passes, else `REJECTED`.
+- **Output:** exactly one of `APPROVED`/`REJECTED`, plus every issue
+  (grouped by `category`, each with a `severity`, a `detail`, and a
+  concrete `suggested_fix`) and per-reviewer metadata (summary, pass/
+  fail, issue count), persisted as one `qa_reports` row.
+- **Failure mode:** on reject, the report's per-issue `category`
+  determines which upstream stage the Manager routes back to (e.g.
+  audio/video/subtitles/thumbnail issues → `VIDEO_CREATION`, since those
+  are now internal to that one stage rather than separately addressable;
+  script issues → `SCRIPTING`), bounded by the project's `retry_count`. A
+  reviewer's own LLM call failing (a bad API key, a refusal, a malformed
+  response) is never caught and turned into a fabricated "no issues
+  found" — it propagates as a genuine job failure, the same
+  no-fallback rule every other LLM-backed generator in this codebase
+  follows (see llm_review.py's own docstring).
+- **Prompts:** `prompts/qa/script_review_{system,user}/`,
+  `prompts/qa/video_review_{system,user}/`,
+  `prompts/qa/thumbnail_review_{system,user}/` — each versioned and
+  pinnable via `QA_PROMPT_VERSION`. `prompts/qa/policy_review/` remains
+  an unwired draft (an LLM-based content-policy review against YouTube
+  monetization/community guidelines) — a natural sixth reviewer to add
+  later; see "Future compatibility" below for why that's a small,
+  additive change.
+
+**Reuse, not reinvention.** Every reviewer's LLM call goes through
+`libs.providers.get_provider("llm")` (libs/providers/llm/) — the first
+consumer in this codebase to route LLM reasoning through the Provider
+Registry rather than a direct `anthropic` SDK import (Research/Script/
+the Thumbnail Agent's own generators predate this capability and are
+unaffected). `LLMProvider.generate_tool_call(system_prompt, user_prompt,
+tool, images=None)` forces a structured "report issues" tool call and
+returns the model's own name/token counts, so a caller never needs
+vendor-specific knowledge; `images` (PNG bytes) is what makes
+`ThumbnailReviewer`'s real vision review possible. `config/providers.yaml`
+defaults `llm.active` to `anthropic` (unlike every other capability's
+`stub` default) — Anthropic is already a hard requirement elsewhere in
+this system, so this doesn't add a new paid-vendor dependency, it just
+makes an already-required one swappable through this same mechanism.
+Every LLM call is wrapped individually in `libs.llm_usage.track_llm_call`
+(`llm_review.py`), so the usage log shows exactly which reviewer made
+each request. `services/agent_qa/app/media_inspection.py` holds the
+shared ffprobe/ffmpeg subprocess plumbing `VideoReviewer`/`AudioReviewer`
+both need (probing streams, a decode check, silence/black-frame/peak-
+level detection) — real technical checks, not heuristics, each verified
+directly against known-good and deliberately-broken test media before
+being trusted in a reviewer.
+
+**Future compatibility.** `QualityControlAgent.__init__` holds
+`self._reviewers` as a plain list — adding a sixth reviewer (e.g. wiring
+up the existing `policy_review` draft) means writing one new class
+implementing `reviewers/base.py`'s `Reviewer` interface
+(`category: str`, `review(ReviewInput) -> ReviewResult`) and appending an
+instance to that list. Nothing about `_gather`, the aggregation rule, or
+any existing reviewer needs to change — a new reviewer just reads
+whatever fields of the already-gathered `ReviewInput` it needs.
 
 ## 3.9 Publisher Agent
 

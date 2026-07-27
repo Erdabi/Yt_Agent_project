@@ -209,3 +209,31 @@ editor:
   # capability's real provider does — a new class + entry here, "active"
   # flipped, nothing in services/agent_video/app/modules/rendering.py
   # touched.
+
+llm:
+  # Unlike every other capability above, Anthropic is already a hard
+  # requirement elsewhere in this system (the Manager's reasoning
+  # engine, Research/Script Agent calls all use it directly) — defaulting
+  # to "anthropic" rather than "stub" doesn't introduce a new paid-vendor
+  # dependency, it just makes an already-required one swappable through
+  # this same registry mechanism. First real consumer:
+  # services/agent_qa/app/ (the Quality Control Agent's reviewers).
+  active: anthropic
+  providers:
+    anthropic:
+      class: libs.providers.llm.anthropic_provider.AnthropicLLMProvider
+      # model/effort default to ANTHROPIC_MODEL/ANTHROPIC_EFFORT
+      # (libs/core/config.py) when omitted here.
+      config: {}
+      secret_ref: ANTHROPIC_API_KEY
+    stub:
+      class: libs.providers.llm.stub_provider.StubLLMProvider
+      config: {}
+  # Real provider example (OpenAI GPT — the documented fallback in
+  # docs/architecture/05-technology-choices.md §5.2): add
+  # libs/providers/llm/openai_provider.py subclassing LLMProvider, then:
+  #   openai:
+  #     class: libs.providers.llm.openai_provider.OpenAIProvider
+  #     config: {model: gpt-5}
+  #     secret_ref: OPENAI_API_KEY
+  # and set active: openai (or LLM_PROVIDER=openai per-environment).

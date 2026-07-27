@@ -114,8 +114,18 @@ before it proceeds.
 
 ## Phase 2 — Automation & QA (~2–3 weeks)
 
-- QA Agent: automated technical checks (sync, silence, duration, resolution,
-  loudness) plus the LLM-based policy review.
+- **Done** — Quality Control Agent (`QualityControlAgent`,
+  services/agent_qa/app/quality_control_agent.py): five coordinated
+  reviewers (script, video, audio, subtitles, thumbnail — see
+  [Agent Responsibilities §3.8](./03-agent-responsibilities.md#38-quality-control-agent)),
+  covering every automated technical check originally scoped here (sync,
+  silence, duration, resolution, loudness — now audio/video-category
+  checks against the real render) plus real LLM-judged checks
+  (factual consistency/quality/engagement for script, visual consistency
+  for video, and a genuine vision-based review of the actual thumbnail
+  image). The LLM-based content-policy review remains the one piece not
+  yet wired in — `prompts/qa/policy_review/` is ready for it as a sixth
+  reviewer, an additive change given the reviewer-list design.
 - Retry-routing logic in the Orchestrator (`FAILED_QA` → correct upstream
   stage, bounded by `retry_count`).
 - Admin dashboard (FastAPI + HTMX): project list, per-stage status, approve/
