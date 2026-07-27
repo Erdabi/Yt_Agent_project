@@ -188,10 +188,18 @@ editor:
     ffmpeg:
       class: libs.providers.editor.ffmpeg_provider.FFmpegEditorProvider
       config:
-        fps: 30
         font_path: /usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf
-        crossfade_sec: 0.5
         audio_bitrate: 128k
+        # Per-subprocess-call budget (not a whole-render budget) — see
+        # FFmpegEditorProvider's own docstring.
+        ffmpeg_timeout_sec: 300
+        # Linear gain applied to a whole-video background-music bed so
+        # it sits under narration rather than competing with it.
+        background_music_volume: 0.18
+      # Resolution/fps/crossfade duration/loudness target/subtitle sizing
+      # are no longer configured here — they're profile-driven (see
+      # config/render_profiles.yaml, libs/providers/editor/profiles.py),
+      # so a different output format never touches this file.
     stub:
       class: libs.providers.editor.stub_provider.StubEditorProvider
       config: {}

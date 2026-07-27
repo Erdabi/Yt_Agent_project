@@ -10,11 +10,11 @@ at something that fails loudly and immediately instead of at a provider
 that would crash mid-render.
 """
 
-from .base import EditorProvider, EditResult, EditSpec
+from .base import EditorProvider, EditResult, EditSpec, ProgressCallback
 
 
 class StubEditorProvider(EditorProvider):
-    def render(self, spec: EditSpec) -> EditResult:
+    def render(self, spec: EditSpec, *, on_progress: ProgressCallback | None = None) -> EditResult:
         raise NotImplementedError(
             "No compositor is configured. Set editor.active to 'ffmpeg' in "
             "config/providers.yaml (libs.providers.editor.ffmpeg_provider."

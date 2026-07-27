@@ -18,7 +18,9 @@ provider) means editing `config/providers.yaml`, not this module. Every
 other asset this module needs was already resolved by Asset Generation/
 Voice Generation; Rendering reads their bytes back via `libs.storage` to
 hand to the provider, and writes the provider's output back through the
-same abstraction.
+same abstraction. No FFmpeg (or any compositor) logic lives here — that
+stays entirely inside `libs/providers/editor/`; this module only builds
+the generic `EditSpec`/`RenderPlan` and resolves storage paths to bytes.
 """
 
 from dataclasses import dataclass
@@ -30,7 +32,16 @@ from libs.core.logging import get_logger
 from libs.models.asset import Asset, Render
 from libs.models.enums import AssetType as PhysicalAssetType
 from libs.models.enums import ShotType
-from libs.providers.editor.base import EditResult, EditSegment, EditSpec, SubtitleLine, VisualClip
+from libs.providers.editor.base import (
+    EditorInputError,
+    EditResult,
+    EditSegment,
+    EditSpec,
+    ProgressCallback,
+    RenderProgress,
+    SubtitleLine,
+    VisualClip,
+)
 from libs.providers.registry import get_provider
 from libs.storage import get_storage_backend
 
@@ -45,6 +56,13 @@ logger = get_logger(__name__)
 #: `RENDER_TIME_OVERLAY` asset has no `storage_path` (see
 #: AssetGenerationModule), so it never becomes a `VisualClipRef`.
 _VIDEO_SHOT_TYPES = frozenset({ShotType.STOCK, ShotType.AI_VIDEO})
+
+#: Default output-format profile (libs/providers/editor/profiles.py) —
+#: today's only real caller (video_agent.py) never varies this, but
+#: `render()` accepts a different one so a future Shorts/aspect-ratio
+#: job is a different argument, not a rewrite of this module or the
+#: compositor.
+_DEFAULT_PROFILE_NAME = "long_form_1080p"
 
 
 @dataclass(frozen=True)
@@ -87,6 +105,7 @@ class RenderPlan:
     total_duration_sec: float
     intro_asset_path: str | None
     outro_asset_path: str | None
+    music_bed_path: str | None
     caption_style: str | None
 
 
@@ -95,14 +114,21 @@ class RenderingModule:
         self._storage = get_storage_backend()
         self._provider = get_provider("editor")
 
-    def render(self, project_id: str, timeline: Timeline, branding: ChannelBranding) -> RenderResult:
+    def render(
+        self,
+        project_id: str,
+        timeline: Timeline,
+        branding: ChannelBranding,
+        *,
+        profile_name: str = _DEFAULT_PROFILE_NAME,
+    ) -> RenderResult:
         plan = self._build_plan(project_id, timeline, branding)
-        edit_result = self._execute(plan)
+        edit_result = self._execute(plan, profile_name)
         render_engine = type(self._provider).__name__
         storage_path = self._storage.save_bytes(
             project_id, "renders", f"{project_id}.mp4", edit_result.video_bytes
         )
-        asset_id = self._persist(project_id, storage_path, edit_result, render_engine)
+        asset_id = self._persist(project_id, storage_path, edit_result, render_engine, profile_name)
         return RenderResult(
             asset_id=asset_id,
             storage_path=storage_path,
@@ -127,6 +153,7 @@ class RenderingModule:
             total_duration_sec=timeline.total_duration_sec,
             intro_asset_path=branding.intro_asset_path,
             outro_asset_path=branding.outro_asset_path,
+            music_bed_path=branding.music_bed_path,
             caption_style=branding.caption_style,
         )
 
@@ -168,11 +195,11 @@ class RenderingModule:
             pacing=entry.pacing.value,
         )
 
-    def _execute(self, plan: RenderPlan) -> EditResult:
-        spec = self._build_edit_spec(plan)
-        return self._provider.render(spec)
+    def _execute(self, plan: RenderPlan, profile_name: str) -> EditResult:
+        spec = self._build_edit_spec(plan, profile_name)
+        return self._provider.render(spec, on_progress=self._log_progress(plan.project_id))
 
-    def _build_edit_spec(self, plan: RenderPlan) -> EditSpec:
+    def _build_edit_spec(self, plan: RenderPlan, profile_name: str) -> EditSpec:
         subtitle_lines = [
             SubtitleLine(
                 start_sec=line["start_sec"],
@@ -191,6 +218,8 @@ class RenderingModule:
             caption_style=plan.caption_style,
             intro_asset=self._read_optional_branding_asset(plan.intro_asset_path),
             outro_asset=self._read_optional_branding_asset(plan.outro_asset_path),
+            background_music=self._read_optional_branding_asset(plan.music_bed_path),
+            profile_name=profile_name,
         )
 
     def _edit_segment(self, op: RenderOperation) -> EditSegment:
@@ -199,22 +228,46 @@ class RenderingModule:
             start_sec=op.start_sec,
             end_sec=op.end_sec,
             visual_clips=[
-                VisualClip(data=self._storage.read_bytes(clip.storage_path), kind=clip.kind)
+                VisualClip(
+                    data=self._read_required_asset(
+                        clip.storage_path, f"segment {op.segment_id} visual ({clip.kind})"
+                    ),
+                    kind=clip.kind,
+                )
                 for clip in op.visual_clips
             ],
             overlay_texts=op.overlay_texts,
-            voice_audio=self._storage.read_bytes(op.voice_storage_path),
+            voice_audio=self._read_required_asset(
+                op.voice_storage_path, f"segment {op.segment_id} narration"
+            ),
             supplementary_audio=[
-                self._storage.read_bytes(path) for path in op.supplementary_audio_storage_paths
+                self._read_required_asset(path, f"segment {op.segment_id} supplementary audio")
+                for path in op.supplementary_audio_storage_paths
             ],
             transition_type=op.transition_type,
         )
 
+    def _read_required_asset(self, storage_path: str, description: str) -> bytes:
+        """Every asset here was already resolved by an earlier module
+        (Asset Generation/Voice Generation) — a missing or unreadable
+        file at this point is a genuine data-integrity problem, not
+        something to skip past like an optional branding asset. Wrapped
+        as `EditorInputError` (rather than a raw `FileNotFoundError`/
+        `OSError` leaking out) so the failure is clearly attributed to
+        *which* segment/asset before the whole job fails honestly.
+        """
+        try:
+            return self._storage.read_bytes(storage_path)
+        except (FileNotFoundError, OSError, ValueError) as exc:
+            raise EditorInputError(
+                f"required asset missing or unreadable ({description}): {storage_path!r}: {exc}"
+            ) from exc
+
     def _read_optional_branding_asset(self, storage_path: str | None) -> bytes | None:
-        """Branding assets (intro/outro) are optional — `None` when a
-        channel hasn't configured one (see `ChannelBranding`), and also
-        skipped rather than failing the whole render if one is configured
-        but no longer exists in storage: a missing accessory clip
+        """Branding assets (intro/outro/music bed) are optional — `None`
+        when a channel hasn't configured one (see `ChannelBranding`), and
+        also skipped rather than failing the whole render if one is
+        configured but no longer exists in storage: a missing accessory
         shouldn't abort an otherwise-successful video.
         """
         if not storage_path:
@@ -224,8 +277,22 @@ class RenderingModule:
             return None
         return self._storage.read_bytes(storage_path)
 
+    def _log_progress(self, project_id: str) -> ProgressCallback:
+        def _on_progress(progress: RenderProgress) -> None:
+            logger.info(
+                "render_progress",
+                project_id=project_id,
+                stage=progress.stage,
+                percent=round(progress.percent, 1),
+                message=progress.message,
+            )
+
+        return _on_progress
+
     @staticmethod
-    def _persist(project_id: str, storage_path: str, edit_result: EditResult, render_engine: str) -> str:
+    def _persist(
+        project_id: str, storage_path: str, edit_result: EditResult, render_engine: str, profile_name: str
+    ) -> str:
         with sync_session_scope() as session:
             asset = Asset(
                 project_id=UUID(project_id),
@@ -233,7 +300,7 @@ class RenderingModule:
                 provider=render_engine,
                 storage_path=storage_path,
                 duration_sec=edit_result.duration_sec,
-                metadata_={"resolution": edit_result.resolution},
+                metadata_={"resolution": edit_result.resolution, "profile_name": profile_name},
             )
             session.add(asset)
             session.flush()

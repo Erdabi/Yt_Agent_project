@@ -175,6 +175,7 @@ class VideoAgent(BaseAgent):
                 outro_asset_path=persona.get("outro_asset_path"),
                 caption_style=persona.get("caption_style"),
                 music_bed_description=persona.get("music_bed_description"),
+                music_bed_path=persona.get("music_bed_path"),
             )
 
         return segments, branding

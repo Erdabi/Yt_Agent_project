@@ -1,0 +1,29 @@
+# Named, reusable render output-format configurations, loaded by
+# libs/providers/editor/profiles.py (path configurable via
+# RENDER_PROFILES_PATH — see .env.example). Selecting a profile — e.g.
+# a future Shorts-cut job passing profile_name="shorts_1080x1920" into
+# EditSpec — is a config/argument choice, never a code change in
+# FFmpegEditorProvider: resolution, frame rate, loudness target,
+# crossfade duration, and subtitle sizing all travel together as one
+# bundle.
+#
+# `services/agent_video/app/modules/rendering.py` selects
+# "long_form_1080p" by default today — no caller passes a different
+# name yet, since only long-form videos are produced end to end, but the
+# mechanism itself (a real YAML file, a real loader, a real profile
+# threaded through the compositor) is exercised and tested now so a
+# future Shorts/aspect-ratio variant is a new entry here, not new code.
+
+long_form_1080p:
+  resolution: "1920x1080"
+  fps: 30
+  loudness_target_lufs: -14
+  crossfade_sec: 0.5
+  subtitle_font_size: 44
+
+shorts_1080x1920:
+  resolution: "1080x1920"
+  fps: 30
+  loudness_target_lufs: -14
+  crossfade_sec: 0.3
+  subtitle_font_size: 56

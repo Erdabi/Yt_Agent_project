@@ -109,6 +109,17 @@ class Settings(BaseSettings):
         default="config/providers.yaml", alias="PROVIDERS_CONFIG_PATH"
     )
 
+    # --- Render profiles (libs/providers/editor) ----------------------------
+    # Path to the config file declaring named, reusable output-format
+    # bundles (resolution, fps, loudness target, crossfade duration,
+    # subtitle sizing) the ffmpeg compositor renders against — see
+    # libs/providers/editor/profiles.py. A different output format
+    # (Shorts, a different aspect ratio) is a new named entry there, not
+    # a code change here or in the compositor.
+    render_profiles_path: str = Field(
+        default="config/render_profiles.yaml", alias="RENDER_PROFILES_PATH"
+    )
+
     # --- Prompt Management System (libs/prompts) ---------------------------
     # Root directory of versioned prompt template files
     # (prompts/<agent>/<name>/v<N>[.<provider>].yaml), loaded by

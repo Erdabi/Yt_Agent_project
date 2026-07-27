@@ -65,7 +65,17 @@ class ChannelBranding:
     intro_asset_path: str | None = None
     outro_asset_path: str | None = None
     caption_style: str | None = None
+    #: Free-text description of the desired music bed — informational
+    #: only; no module resolves it to an actual asset (that would mean
+    #: generating/sourcing one, a separate feature this doesn't build).
     music_bed_description: str | None = None
+    #: An already-resolved storage path to a real background-music
+    #: asset, distinct from the description above — set once a channel
+    #: has actually uploaded/generated one. Read by Rendering
+    #: (services/agent_video/app/modules/rendering.py) and looped/ducked
+    #: under the whole video by the editor provider, the same optional-
+    #: with-graceful-fallback treatment as intro/outro.
+    music_bed_path: str | None = None
 
 
 # --- Asset Planning ---------------------------------------------------

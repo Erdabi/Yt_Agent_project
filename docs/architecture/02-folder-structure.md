@@ -17,7 +17,8 @@ yt-agent/
 │   └── adr/                          # architecture decision records (one file per significant decision)
 │
 ├── config/
-│   └── providers.yaml                # which concrete class backs each swappable capability (libs/providers)
+│   ├── providers.yaml                 # which concrete class backs each swappable capability (libs/providers)
+│   └── render_profiles.yaml           # named output-format bundles (resolution/fps/loudness/crossfade/subtitle-size) for libs/providers/editor
 │
 ├── prompts/                          # versioned prompt template files, loaded via libs/prompts —
 │   │                                 # never embedded as Python string constants — see prompts/README.md
@@ -110,7 +111,7 @@ yt-agent/
 │   │   ├── image_gen/{base.py, stub_provider.py}
 │   │   ├── stock_media/{base.py, stub_provider.py}    # StockMediaProvider.search() — stock footage/photos
 │   │   ├── audio_library/{base.py, stub_provider.py}  # AudioLibraryProvider.search() — sound effects/music cues
-│   │   ├── editor/{base.py, stub_provider.py, ffmpeg_provider.py}  # compositor — ffmpeg_provider.py is real, not a stub (no vendor account needed)
+│   │   ├── editor/{base.py, stub_provider.py, ffmpeg_provider.py, profiles.py}  # compositor — ffmpeg_provider.py is real, not a stub (no vendor account needed); profiles.py loads config/render_profiles.yaml (resolution/fps/loudness/crossfade/subtitle-size bundles, one per output format)
 │   │   └── youtube/{base.py, stub_provider.py}
 │   │
 │   ├── storage/                      # centralized asset storage, keyed by project id

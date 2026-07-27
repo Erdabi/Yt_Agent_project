@@ -478,40 +478,102 @@ valid regardless of whether its own index row won that race.
 
 ### 3.4.6 Rendering module
 
-- **Input:** the `Timeline`, plus channel branding (intro/outro,
-  caption style) read from `Channel.persona_config`.
+- **Input:** the `Timeline`, plus channel branding (intro/outro, music
+  bed, caption style) read from `Channel.persona_config`, and a
+  `profile_name` (defaults to `"long_form_1080p"`, see **Render
+  profiles** below).
 - **Does:** builds a render plan from the Timeline — resolving each
   entry's visuals, layering voice-over/supplementary audio/captions,
   applying transitions — then hands that plan to
   `libs.providers.get_provider("editor")`, the *only* capability this
-  module calls (see `libs/providers/editor/base.py`'s `EditSpec`). It
-  reads every asset's bytes back via `libs.storage` right before handing
-  them to the provider (plan-building itself stays storage-free, like
-  every other module's own plan/output types), and writes the provider's
-  returned video bytes back through the same abstraction. Swapping the
+  module calls (see `libs/providers/editor/base.py`'s `EditSpec`). Every
+  asset the plan references was already resolved by an earlier module
+  (Asset Generation/Voice Generation); Rendering reads each one's bytes
+  back via `libs.storage` right before handing them to the provider
+  (plan-building itself stays storage-free, like every other module's
+  own plan/output types) via `_read_required_asset` — a missing or
+  unreadable required asset raises `EditorInputError` naming exactly
+  which segment/asset failed, rather than a bare `FileNotFoundError`
+  surfacing from deep inside the pipeline. An optional branding asset
+  (intro/outro/music bed) that's configured but no longer in storage is
+  instead logged and skipped — a missing accessory shouldn't abort an
+  otherwise-successful video. Rendering writes the provider's returned
+  video bytes back through the same storage abstraction. Swapping the
   compositor is a `config/providers.yaml` change, same as any other
   capability — Rendering itself knows nothing about ffmpeg specifically.
+- **Progress reporting:** passes an `on_progress` callback
+  (`libs/providers/editor/base.py`'s `ProgressCallback`/`RenderProgress`)
+  into the provider call. The provider invokes it once per pipeline
+  stage (`normalize_segments` per segment, `assemble`,
+  `mix_background_music`, `finalize`, `probe_output`) with a computed
+  completion percentage. Rendering's own callback
+  (`_log_progress`) just logs each event via structlog — no new DB
+  column or polling mechanism was added, since nothing today reads
+  progress outside logs; a future UI wanting live progress would swap
+  that one callback for something that persists it.
 - **Compositor:** unlike every other capability in this pipeline, a
   compositor needs no paid vendor account — ffmpeg is a free local
   binary — so `editor`'s "active" provider
   (`libs/providers/editor/ffmpeg_provider.py`) is a real, working
   implementation from day one, not a stub. It normalizes every visual
-  clip (image or video) to the target resolution/frame rate and the
-  exact duration its segment needs, mixes narration with any
-  supplementary audio per segment, applies a plain fade for any
-  non-"cut" transition between segments (distinct wipe/slide/zoom/
-  dissolve filtergraphs per `TransitionType` are a documented future
-  enhancement, not implemented), concatenates every segment plus an
-  optional intro/outro, and burns in every subtitle cue (emphasized cues
-  in a highlight color) in one final pass over the assembled video.
+  clip (image or video) to the resolved render profile's
+  resolution/frame rate and the exact duration its segment needs, mixes
+  narration with any supplementary audio per segment, applies a plain
+  fade for any non-"cut" transition between segments (distinct wipe/
+  slide/zoom/dissolve filtergraphs per `TransitionType` are a documented
+  future enhancement, not implemented), concatenates every segment plus
+  an optional intro/outro, mixes in an optional whole-video
+  background-music bed (looped/trimmed to the total duration, volume-
+  reduced so it sits under narration), normalizes the final audio to the
+  profile's EBU R128 loudness target (single-pass `loudnorm` — real and
+  working, though less precise than a two-pass analyze-then-normalize
+  approach — a deliberate simplicity/accuracy tradeoff), and burns in
+  every subtitle/overlay cue (emphasized cues in a highlight color) via
+  `textfile=` (not an inline `text='...'` literal — sidesteps filter-
+  string escaping bugs with quotes/apostrophes in narration text) in one
+  final pass over the assembled video.
+- **Render profiles:** resolution, fps, loudness target, crossfade
+  duration, and subtitle font size travel together as one named,
+  swappable `RenderProfile` (`libs/providers/editor/profiles.py`),
+  loaded from `config/render_profiles.yaml` via a registry-style
+  `get_render_profile(name)` loader mirroring
+  `libs/providers/registry.py`'s config-loading pattern. `EditSpec`
+  carries a `profile_name` rather than a bare resolution string, so a
+  future output format (Shorts, a different aspect ratio) is a new named
+  profile entry in that YAML file — never a code change to the
+  compositor. Today's two profiles: `long_form_1080p` (1920x1080) and
+  `shorts_1080x1920` (1080x1920, portrait).
+- **Error handling:** every failure path in the ffmpeg provider raises
+  one of three typed exceptions (`libs/providers/editor/base.py`) rather
+  than a bare exception — `EditorInputError` (bad/missing/corrupt input,
+  empty timeline, unknown profile name — retrying won't help),
+  `EditorTimeoutError` (a compositor subprocess exceeded its configured
+  time budget), or `EditorRenderError` (the compositor itself failed for
+  any other reason, carrying ffmpeg's own stderr for diagnosis). Every
+  `subprocess.run` call (ffmpeg and ffprobe alike) passes a per-call
+  timeout (`ffmpeg_timeout_sec`, default 300s) rather than one budget
+  for the whole render, since individual stages vary hugely in expected
+  duration. Every input (visual clip, branding asset, audio track,
+  background-music bed) is put through a fast pre-flight decode check
+  (`ffmpeg -i <path> -frames:v 1 -f null -`) before the real normalize
+  command runs — discovered empirically that looping a corrupt still
+  image (`-loop 1`) can hang indefinitely rather than failing fast,
+  unlike a plain non-looping decode of the same bytes, so this check
+  catches corrupt/unsupported media quickly and reports it as
+  `EditorInputError` instead of only surfacing after the full timeout
+  elapses.
 - **Output:** the final rendered video `assets` row (resolution,
-  duration) referenced by a `renders` row.
+  duration, and the `profile_name` used, in `Asset.metadata_`)
+  referenced by a `renders` row.
 - **Failure mode:** a compositor crash fails the whole Video Agent job,
   which the Manager retries from the start — renders are not resumable,
   and neither is the module sequence. A missing (but optional) intro/
-  outro branding asset is not treated as a failure: it's logged and
-  skipped, since an accessory clip going missing shouldn't abort an
-  otherwise-successful video.
+  outro/music-bed branding asset is not treated as a failure: it's
+  logged and skipped, since an accessory clip going missing shouldn't
+  abort an otherwise-successful video. A missing *required* asset
+  (a segment's own visual/narration/supplementary audio) is a genuine
+  data-integrity failure and fails the job honestly, attributed to the
+  specific segment/asset.
 
 ### Thumbnail Generation module
 
