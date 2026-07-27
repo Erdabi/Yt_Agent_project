@@ -1,0 +1,27 @@
+template: |
+  Video title: {{ video_title }}
+  Channel niche: {{ channel_niche }}
+  Channel persona / tone: {{ channel_persona }}
+  Channel style guide: {{ style_guide_summary }}
+  {% if target_audience %}Target audience: {{ target_audience }}
+  {% endif %}
+  {% if suggested_angle %}Creative angle: {{ suggested_angle }}
+  {% endif %}
+  {% if banned_topics %}Banned topics (never depict or reference these): {{ banned_topics | join(", ") }}
+  {% endif %}
+  {% if emphasis_words %}Words/concepts the script itself emphasizes: {{ emphasis_words | join(", ") }}
+  {% endif %}
+  Full script:
+  """
+  {{ script_text }}
+  """
+
+  Propose {{ concept_count }} distinct thumbnail concept(s) for this video.
+metadata:
+  description: >
+    Per-call context for the Thumbnail Agent's concept-generation call
+    (services/agent_video/app/thumbnail_concept_generator.py). Variables:
+    video_title, channel_niche, channel_persona, style_guide_summary,
+    target_audience, suggested_angle, banned_topics, emphasis_words,
+    script_text, concept_count.
+  owner: thumbnail-agent

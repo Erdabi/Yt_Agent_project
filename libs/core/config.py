@@ -142,6 +142,24 @@ class Settings(BaseSettings):
     # without a code change.
     script_prompt_version: str = Field(default="latest", alias="SCRIPT_PROMPT_VERSION")
 
+    # --- Thumbnail Agent: prompt template version + concept/render counts --
+    # Which version of prompts/thumbnail/generate_concepts_system/ (and its
+    # generate_concepts_user/ counterpart) the Thumbnail Agent
+    # (services/agent_video/app/thumbnail_agent.py) resolves. Same
+    # rationale as script_prompt_version.
+    thumbnail_prompt_version: str = Field(default="latest", alias="THUMBNAIL_PROMPT_VERSION")
+    # How many distinct thumbnail concepts Claude proposes per call —
+    # cheap (text only), so a healthy default gives the render step real
+    # options to pick from.
+    thumbnail_concept_count: int = Field(default=3, alias="THUMBNAIL_CONCEPT_COUNT")
+    # How many of those concepts (best-ranked first) actually get rendered
+    # into real images via the image_gen provider — each render costs a
+    # real provider call, so this defaults to 1 (today's behavior); set
+    # higher to produce several real variants for future A/B testing
+    # (libs/models/asset.py's `Thumbnail.variant_label`/`is_selected`
+    # already support more than one row per project).
+    thumbnail_render_count: int = Field(default=1, alias="THUMBNAIL_RENDER_COUNT")
+
     @computed_field  # type: ignore[misc]
     @property
     def database_url(self) -> str:

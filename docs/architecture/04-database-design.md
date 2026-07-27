@@ -198,9 +198,18 @@ stage-specific metadata (voice id/provider/model/language for `voiceovers`;
 render engine and final duration for `renders`; `is_selected` flag and A/B
 variant label for `thumbnails`). `voiceovers` is written by the Video Agent's
 Voice Generation module; `renders` by its Rendering module, via the `editor`
-capability's real ffmpeg-based compositor (§3.4); `thumbnails` by its
-Thumbnail Generation module — one variant per project today (`is_selected`
-always true), automated A/B variant testing being a later phase (§6, Phase 4).
+capability's real ffmpeg-based compositor (§3.4); `thumbnails` by the
+Thumbnail Agent (§3.4's Thumbnail Agent — a genuine, independent agent
+invoked in-process by the Video Agent) — one row per rendered concept
+variant, `THUMBNAIL_RENDER_COUNT` (default 1) of them per project, with
+`is_selected` true only for the best-ranked one; automated A/B variant
+testing building on that existing multi-row support is a later phase
+(§6, Phase 4). Each variant's richer metadata (the exact `image_prompt`,
+the concept's name/visual description/overlay text/rationale, generation
+settings, and timestamp) lives on that variant's own `assets.metadata`
+row rather than a `thumbnails` column, the same "generic `assets` table,
+stage-specific extra columns stay thin" split every other join table
+here already uses.
 
 `voiceovers.model`/`.language` (alongside the pre-existing `.provider`/
 `.voice_id`) complete the metadata bundle the real TTS provider interface

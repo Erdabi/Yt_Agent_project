@@ -39,6 +39,11 @@ class ChannelProfile(BaseModel):
     banned_topics: list[str] = Field(default_factory=list)
     seed_topics: list[str] = Field(default_factory=list)
     youtube_channel_id: str | None = None
+    #: Freeform visual-branding guidance (composition/color/tone), read
+    #: from `persona_config["style_guide_summary"]` — used today by the
+    #: Thumbnail Agent (services/agent_video/app/thumbnail_agent.py), but
+    #: a channel-level property any visual-generation consumer could use.
+    style_guide_summary: str | None = None
 
 
 class ProjectMetadata(BaseModel):

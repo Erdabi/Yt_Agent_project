@@ -70,6 +70,7 @@ def build_project_context(
             banned_topics=list(persona.get("banned_topics") or []),
             seed_topics=list(persona.get("seed_topics") or []),
             youtube_channel_id=channel.youtube_channel_id,
+            style_guide_summary=persona.get("style_guide_summary"),
         )
 
         research_summary = ResearchSummary(

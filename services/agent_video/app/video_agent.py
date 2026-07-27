@@ -8,22 +8,28 @@ decision still covers all of it:
     Asset Planning -> Asset Generation -> Voice Generation
         -> Subtitle Generation -> Timeline Building -> Rendering
 
-Plus Thumbnail Generation, which runs alongside but has no place in that
-dependency chain (see modules/thumbnail.py). Each module has one clearly
-typed input and one clearly typed output (services/agent_video/app/
-pipeline_schema.py) — no module reaches into another's internals, and
-each module calls at most the one `libs.providers` capability it
-genuinely needs: Asset Generation calls `image_gen`/`video_gen`/
-`stock_media`/`audio_library`, Voice Generation calls `tts`, and
-Rendering calls `editor` (its compositor). That is what makes a provider
-swappable independently: changing which class backs `tts` in
-config/providers.yaml only touches Voice Generation's own call site,
-because Timeline Building never sees a provider at all, only the
+Plus the Thumbnail Agent (thumbnail_agent.py), which runs alongside but
+has no place in that dependency chain — it only needs the finished
+script and channel branding, not anything Rendering produces. It is a
+genuine, independent `BaseAgent` in its own right (own concept-generation
+LLM call, own Celery task for standalone regeneration — see its own
+module docstring for why), but is invoked here *in-process* rather than
+as its own Manager-dispatched stage, so this job still reports to the
+Manager exactly once for the whole `video_creation` stage. Each module
+has one clearly typed input and one clearly typed output
+(services/agent_video/app/pipeline_schema.py) — no module reaches into
+another's internals, and each module calls at most the one
+`libs.providers` capability it genuinely needs: Asset Generation calls
+`image_gen`/`video_gen`/`stock_media`/`audio_library`, Voice Generation
+calls `tts`, and Rendering calls `editor` (its compositor). That is what
+makes a provider swappable independently: changing which class backs
+`tts` in config/providers.yaml only touches Voice Generation's own call
+site, because Timeline Building never sees a provider at all, only the
 `VoiceSegment`/`ResolvedAsset` values Voice Generation/Asset Generation
-already resolved. Thumbnail Generation also calls `image_gen` on its own
-(see modules/thumbnail.py) — independent of Asset Generation's own use
-of the same capability, since a thumbnail's image has nothing to do with
-any one storyboard shot.
+already resolved. The Thumbnail Agent also calls `image_gen` on its own
+(see thumbnail_agent.py) — independent of Asset Generation's own use of
+the same capability, since a thumbnail's image has nothing to do with any
+one storyboard shot.
 
 The real dependency chain is: Asset Generation needs Asset Planning's
 plan; Subtitle Generation needs Voice Generation's durations/timing;
@@ -64,10 +70,10 @@ from .modules.asset_generation import AssetGenerationModule
 from .modules.asset_planning import AssetPlanningModule
 from .modules.rendering import RenderingModule
 from .modules.subtitle_generation import SubtitleGenerationModule
-from .modules.thumbnail import ThumbnailModule
 from .modules.timeline_building import TimelineBuildingModule
 from .modules.voice_generation import VoiceGenerationModule
 from .pipeline_schema import ChannelBranding, SegmentInput
+from .thumbnail_agent import ThumbnailAgent
 
 logger = get_logger(__name__)
 
@@ -82,7 +88,7 @@ class VideoAgent(BaseAgent):
         self._subtitle_generation = SubtitleGenerationModule()
         self._timeline_building = TimelineBuildingModule()
         self._rendering = RenderingModule()
-        self._thumbnail = ThumbnailModule()
+        self._thumbnail = ThumbnailAgent()
 
     def run(self, context: JobContext) -> dict[str, Any]:
         if not context.project_id:
@@ -101,7 +107,10 @@ class VideoAgent(BaseAgent):
             context.project_id, segments, resolved_assets, voice_segments, subtitle_cues
         )
         render_result = self._rendering.render(context.project_id, timeline, branding)
-        thumbnail_result = self._thumbnail.generate(context)
+        # `.run()` directly (not `.execute_job()`): this is an in-process
+        # call within the Video Agent's own job, not a separate
+        # Manager-tracked job — see thumbnail_agent.py's module docstring.
+        thumbnail_result = self._thumbnail.run(context)
 
         return {
             "segment_count": len(segments),

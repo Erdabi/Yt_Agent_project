@@ -39,7 +39,7 @@ flowchart TB
 
         A1["Research Agent"]
         A2["Script Agent"]
-        A3["Video Agent\n(storyboard + voice-over +\nassembly + thumbnail modules)"]
+        A3["Video Agent\n(storyboard + voice-over + assembly +\nthe Thumbnail Agent, invoked in-process)"]
         A7["QA Agent"]
         A8["Publisher Agent"]
         A9["Analytics Agent\n(independent, scheduled)"]
@@ -68,9 +68,17 @@ flowchart TB
 ```
 
 The Video Agent is one Celery task on one queue (`video`) — storyboard,
-voice-over, assembly, and thumbnail generation are its four internal
-modules (services/agent_video/app/modules/), invoked in sequence within a
-single job, not four separately-dispatched agents. The Analytics Agent is
+voice-over, and assembly are its internal modules
+(services/agent_video/app/modules/), invoked in sequence within a single
+job. Thumbnail generation is a genuine, independent agent in its own
+right (`ThumbnailAgent`, services/agent_video/app/thumbnail_agent.py) —
+its own concept-generation LLM call, its own standalone Celery task
+(`agents.thumbnail.run`, same `video` queue) — but is invoked
+*in-process* by that same job rather than becoming a fifth
+separately-dispatched agent, so the Manager still sees exactly one job
+for the whole `video_creation` stage (§3.4 of
+docs/architecture/03-agent-responsibilities.md has the full rationale).
+The Analytics Agent is
 drawn separately from the `Q` queue fan-out on purpose: it is never
 dispatched by the Orchestrator's pipeline queue at all — its own Celery
 beat process (`agent_analytics_beat`) triggers it on a recurring schedule
@@ -149,10 +157,11 @@ for centralized observability and the ability to change pipeline behavior
    marks them `proposed` for human approval via the dashboard.
 5. On approval, **Orchestrator** creates a `projects` row and enqueues `script`.
 6. **Video Agent** is invoked once for the whole `video_creation` stage:
-   dequeue → run its storyboard, voice-over, assembly, and thumbnail
-   modules in sequence within that one job → write artifacts to
-   `assets`/domain tables + centralized storage (`libs/storage`) → report
-   one result covering all four.
+   dequeue → run its storyboard, voice-over, and assembly modules, plus
+   the Thumbnail Agent (invoked in-process, not a separate dispatch), in
+   sequence within that one job → write artifacts to `assets`/domain
+   tables + centralized storage (`libs/storage`) → report one result
+   covering all of it.
 7. **QA Agent** gates progression to `publishing`.
 8. **Publisher Agent** uploads to YouTube via the Data API, stores the returned
    `youtube_video_id` in `publications`.

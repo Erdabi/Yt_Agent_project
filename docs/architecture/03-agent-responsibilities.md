@@ -262,20 +262,21 @@ research; the Research Agent (§3.2) already did that.
 One agent, one queue (`video`), one `ProjectStage` (`VIDEO_CREATION`) —
 but internally, video production is a pipeline of six modules, run in
 sequence within a single job (services/agent_video/app/video_agent.py),
-plus a seventh (Thumbnail Generation) that runs alongside it:
+plus the Thumbnail Agent — a genuine, independent agent in its own right
+(see below), invoked in-process alongside it:
 
     Asset Planning -> Asset Generation -> Voice Generation
         -> Subtitle Generation -> Timeline Building -> Rendering
 
 The Manager dispatches and retries this stage as one unit; it never sees
-or retries an individual module. Each module has one clearly typed input
-and one clearly typed output
+or retries an individual module (or the in-process Thumbnail Agent call).
+Each module has one clearly typed input and one clearly typed output
 (services/agent_video/app/pipeline_schema.py) — no module reaches into
 another's internals, and each module calls at most the one
 `libs.providers` capability it genuinely needs: Asset Generation calls
 `image_gen`/`video_gen`/`stock_media`/`audio_library`, Voice Generation
-calls `tts`, Rendering calls `editor` (its compositor), and Thumbnail
-Generation (which runs alongside the six, not part of the chain) calls
+calls `tts`, Rendering calls `editor` (its compositor), and the Thumbnail
+Agent (which runs alongside the six, not part of the chain) calls
 `image_gen` independently of Asset Generation's own use of it. That is
 what makes a provider swappable independently: changing which class
 backs `tts` in `config/providers.yaml` only touches Voice Generation's
@@ -291,7 +292,7 @@ Planning/Asset Generation have no real dependency on Voice
 Generation/Subtitle Generation (or vice versa) — they could run in
 parallel — but `VideoAgent.run()` still sequences everything in one
 straight line, the same trade-off the previous four-module design already
-made explicitly for Thumbnail Generation: one job, one linear sequence,
+made explicitly for thumbnail generation: one job, one linear sequence,
 rather than concurrency inside a single Celery task for a modest latency
 win. A failure partway through (e.g. Rendering breaks) means the *whole*
 video job is retried by the Manager, including every already-succeeded
@@ -299,15 +300,15 @@ module's work — acceptable because most of these modules are fast/cheap
 relative to Rendering, and a partial-video retry was never really "resume
 where it broke" anyway, since Timeline Building's output depends on all
 of them regardless; the Asset Cache (below) means a retry's Asset
-Generation/Voice Generation/Thumbnail Generation work is often close to
+Generation/Voice Generation/Thumbnail Agent work is often close to
 free the second time anyway.
 
 Module logic itself (deciding what's needed, computing timing, building a
 render plan) is real and tested end to end, including a real compositor
-(`libs/providers/editor/ffmpeg_provider.py`) and real thumbnail
-compositing — the whole pipeline has been verified to produce an actual
-playable MP4 and thumbnail image end to end (§3.4.6, §3.4's Thumbnail
-Generation section). `video_gen` and `tts` also each have a real,
+(`libs/providers/editor/ffmpeg_provider.py`) and the real Thumbnail Agent
+described below — the whole pipeline has been verified to produce an
+actual playable MP4 and thumbnail image end to end (§3.4.6, this
+section's Thumbnail Agent). `video_gen` and `tts` also each have a real,
 verified adapter alongside their stub — Runway ML
 (`libs/providers/video_gen/runway_provider.py`) and ElevenLabs
 (`libs/providers/tts/elevenlabs_provider.py`) — both proven end to end
@@ -327,11 +328,12 @@ docstring). Swapping any of these in exercises the same module code
 already verified against fake providers; nothing about the pipeline
 itself needs to change.
 
-**Asset Cache.** Sitting directly in front of both provider-calling
-modules' leaf calls is `services/agent_video/app/asset_cache.py`'s
-`AssetCache` — before Asset Generation or Voice Generation calls a
-provider, it checks this cache for an asset already produced from an
-identical semantic request, and reuses it instead of regenerating it.
+**Asset Cache.** Sitting directly in front of every provider-calling
+module/agent's leaf calls is `services/agent_video/app/asset_cache.py`'s
+`AssetCache` — before Asset Generation, Voice Generation, or the
+Thumbnail Agent calls a provider, it checks this cache for an asset
+already produced from an identical semantic request, and reuses it
+instead of regenerating it.
 "Identical" is a SHA-256 hash of a canonical JSON payload
 (`AssetCacheKey`) covering everything that determines the output:
 `capability`, `provider_name`, `asset_type`, `prompt`, and whichever of
@@ -575,32 +577,91 @@ valid regardless of whether its own index row won that race.
   data-integrity failure and fails the job honestly, attributed to the
   specific segment/asset.
 
-### Thumbnail Generation module
+### Thumbnail Agent
 
-Runs last inside `VideoAgent.run()`, alongside — not part of — the
-six-module pipeline above: it has no real ordering dependency on any of
-it, since it only needs the approved script/title and the channel's
-style guide, not anything Rendering produces. Runs after it anyway to
-keep `VideoAgent.run()` one simple sequence.
+A genuine, independent agent
+(`services/agent_video/app/thumbnail_agent.py`'s `ThumbnailAgent`, a real
+`BaseAgent` subclass, `name = "thumbnail"`) — not just another pipeline
+module — invoked last inside `VideoAgent.run()`, alongside (not part of)
+the six-module pipeline above: it has no real ordering dependency on any
+of it, since it only needs the finished script and channel branding, not
+anything Rendering produces. Runs after Rendering anyway to keep
+`VideoAgent.run()` one simple sequence.
 
-- **Input:** the project's video title (`VideoIdea.title`), the
-  channel's style guide summary (`Channel.persona_config`), and the
-  hook segment's emphasis words.
-- **Does:** renders `prompts/video/thumbnail_prompt/` into an image-gen
-  prompt, checks the Asset Cache, and on a miss calls
-  `libs.providers.get_provider("image_gen")` for the base image — the
-  *only* capability this module calls, independent of Asset Generation's
-  own use of the same capability for storyboard shots. Composites the
-  video's title onto that image locally with Pillow (not a provider
-  capability, the same way Rendering's ffmpeg compositing isn't one
-  either).
-- **Output:** one `thumbnails` row linked to an `assets` row, marked
-  `is_selected`. Only one variant is produced today — automated
-  thumbnail/title A/B variant testing is Phase 4 (§6).
-- **Failure mode:** an image-gen provider failure fails the job
-  honestly, same as every other provider call in this pipeline — no
-  template-only fallback.
-- **Prompt:** `prompts/video/thumbnail_prompt/`.
+- **Input:** `ProjectContext` (`libs.context.build_project_context`) for
+  the channel profile (niche, persona, banned topics, style guide) and
+  research summary (the video's title/target audience/suggested angle),
+  plus the project's full script (read directly — `ProjectContext`
+  deliberately carries no script content, see libs/context/schema.py).
+- **Does, in order:**
+  1. Calls `ThumbnailConceptGenerator` (thumbnail_concept_generator.py) —
+     a forced-tool-use Claude call, same pattern as the Research Agent's
+     `IdeaGenerator`/the Script Agent's `ScriptGenerator` — analyzing the
+     topic, title, full script, and branding to propose
+     `THUMBNAIL_CONCEPT_COUNT` (default 3) ranked thumbnail concepts,
+     best-first: a concept name, a visual description, an
+     image-generation prompt optimized for a 16:9 frame, a short
+     on-thumbnail overlay text, and a rationale. Prompts load from
+     `prompts/thumbnail/generate_concepts_{system,user}/`, versioned and
+     pinnable via `THUMBNAIL_PROMPT_VERSION` — never embedded as Python
+     string constants.
+  2. Renders the top `THUMBNAIL_RENDER_COUNT` (default 1) concepts into
+     real images: checks the Asset Cache for each concept's exact
+     `image_prompt`, and on a miss calls
+     `libs.providers.get_provider("image_gen")` — the *only* capability
+     this agent calls for image generation, independent of Asset
+     Generation's own use of the same capability for storyboard shots.
+  3. Enforces exactly 1280x720 regardless of whatever native size/aspect
+     ratio the provider returned — crop-to-cover (centered, never
+     letterboxed) then resize — composites the concept's overlay text
+     (falling back to the video title if the concept proposed none)
+     locally with Pillow (not a provider capability, the same way
+     Rendering's ffmpeg compositing isn't one either), and always emits
+     PNG.
+  4. Persists one `assets` row per rendered variant, with a
+     self-contained metadata record (`prompt`, `provider`, `model` — null
+     today, since no `image_gen` provider surfaces one back, unlike TTS's
+     `SynthesisResult` — `generation_settings`, `concept_name`,
+     `visual_description`, `overlay_text`, `rationale`, `variation`,
+     `generated_at`), and one `thumbnails` row per variant
+     (`variant_label`, `is_selected` — true only for the best-ranked/first
+     variant).
+- **Output:** the selected variant's asset id/storage path/concept name
+  at the top level, plus every rendered variant, for future A/B variant
+  testing (Phase 4, §6) to build on without a schema change —
+  `thumbnails`/`is_selected` already support more than one row per
+  project today.
+- **Failure mode:** a concept-generation or image-gen provider failure
+  fails the job honestly, same as every other provider call in this
+  pipeline — no template-only fallback, no fabricated concept.
+- **Reuse, not reinvention:** Provider Registry (`get_provider`), Asset
+  Cache (`services/agent_video/app/asset_cache.py` — shared with Asset
+  Generation/Voice Generation), Prompt Management
+  (`prompts/thumbnail/`), and `ProjectContext` all reused as-is; no new
+  provider abstraction, no hardcoded provider, no new caching mechanism.
+  Concept *reasoning* is a direct `anthropic` SDK call rather than a
+  `libs.providers` capability — matching every other agent's own
+  LLM-reasoning step in this codebase (Research/Script/Manager) — since
+  "reuse the Provider Registry"/"don't hardcode providers" is about the
+  swappable *image generation* provider, which this agent never hardcodes.
+- **Deployment:** deliberately *not* its own `ProjectStage`/Manager-
+  dispatched stage — the Manager's workflow plan stays fixed at five
+  stages (services/orchestrator/app/manager/workflow.py); promoting this
+  to a sixth would mean tracking two jobs per `video_creation` stage, a
+  materially bigger change than this agent's own scope. It is invoked
+  *in-process* by `VideoAgent.run()` (so the Manager still sees exactly
+  one job for the whole stage), but is also independently dispatchable —
+  `agents.thumbnail.run` (services/agent_video/app/worker.py), same
+  queue/worker, for regenerating a thumbnail without rerunning the whole
+  video pipeline. That standalone path sets `reports_to_manager = False`:
+  a regeneration job's project can be in *any* stage, and
+  `ManagerAgent.handle_job_finished` decides from the project's current
+  stage, not the reporting job's `agent_name` — letting a stray thumbnail
+  job notify the Manager could incorrectly advance/retry/escalate
+  whatever stage that project actually happens to be in (same reasoning
+  as the Analytics Agent, §3.10).
+- **Prompts:** `prompts/thumbnail/generate_concepts_system/`,
+  `prompts/thumbnail/generate_concepts_user/`.
 
 ## 3.8 Quality Assurance Agent
 

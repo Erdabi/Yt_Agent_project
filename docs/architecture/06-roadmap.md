@@ -63,16 +63,20 @@ for a single developer, not commitments.
   (no separate agents/queues to coordinate — see
   [Agent Responsibilities §3.4](./03-agent-responsibilities.md#34-video-agent)).
   **Done end to end** — Asset Planning, Asset Generation, Voice
-  Generation, Subtitle Generation, Timeline Building, Rendering, and
-  Thumbnail Generation are seven real, independently-testable modules
-  with typed inputs/outputs (services/agent_video/app/pipeline_schema.py),
-  each calling `libs.providers` (`image_gen`/`video_gen`/`stock_media`/
-  `audio_library`/`tts`/`editor`) only where it genuinely needs to, so
-  swapping one capability's provider never touches another module's code
-  — proven by running the full pipeline end to end against real
-  Postgres, producing an actual playable MP4 and thumbnail image, and
-  confirming the Asset Cache (below) makes a second, identical request
-  reuse prior output with zero new provider calls. What's still a real
+  Generation, Subtitle Generation, Timeline Building, and Rendering are
+  six real, independently-testable modules with typed inputs/outputs
+  (services/agent_video/app/pipeline_schema.py), plus the Thumbnail Agent
+  — a genuine, independent agent (`ThumbnailAgent`,
+  services/agent_video/app/thumbnail_agent.py; concept generation via a
+  forced-tool-use Claude call, then rendering through `image_gen`)
+  invoked in-process alongside them. Each calls `libs.providers`
+  (`image_gen`/`video_gen`/`stock_media`/`audio_library`/`tts`/`editor`)
+  only where it genuinely needs to, so swapping one capability's provider
+  never touches another module's/agent's code — proven by running the
+  full pipeline end to end against real Postgres, producing an actual
+  playable MP4 and a 1280x720 thumbnail image, and confirming the Asset
+  Cache (below) makes a second, identical request reuse prior output with
+  zero new provider calls. What's still a real
   *vendor* integration away: `image_gen`/`stock_media`/`audio_library`
   are all still the `stub` implementation (config/providers.yaml,
   `active: stub`) — no AI-generated visuals yet, MVP relies on whichever
@@ -153,7 +157,11 @@ in the dashboard within a day of publishing.
   wiring InVideo/Veo once either publishes a real API to implement
   against) and relying on it beyond stock footage as the primary visual
   source.
-- Automated thumbnail/title A/B variant testing.
+- Automated thumbnail/title A/B variant testing — the Thumbnail Agent
+  already renders `THUMBNAIL_RENDER_COUNT` concept variants per project
+  and `thumbnails.is_selected`/`variant_label` already support more than
+  one row; what's missing is a mechanism to actually run/measure a
+  multi-variant test against real view data, not the underlying storage.
 - Per-provider cost tracking dashboard (`provider_usage_log` surfaced as
   spend-by-provider, spend-by-video).
 - Multi-channel support exercised for real, if managing more than one

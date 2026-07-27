@@ -5,8 +5,8 @@
 # no Python wrapper library needed, and no vendor SDK either, since ffmpeg
 # is a free local binary (installed in the Dockerfile, not here).
 #
-# thumbnail.py composites its generated title text onto the base image
-# locally rather than through any provider.
+# thumbnail_agent.py composites its overlay text onto the generated base
+# image locally rather than through any provider.
 Pillow==12.3.0
 
 # libs/providers/video_gen/runway_provider.py's real Runway ML adapter —
@@ -14,6 +14,10 @@ Pillow==12.3.0
 # vendor REST API (every prior provider was either a stub or, like
 # ffmpeg, shells out to a local binary instead).
 requests==2.32.3
+
+# thumbnail_concept_generator.py calls the Claude API directly for
+# concept generation, same as the Research/Script Agents' own LLM calls.
+anthropic==0.120.0
 
 # Still stub implementations, waiting on real vendor integrations
 # (docs/architecture/06-roadmap.md): asset_generation.py (stock-media/
