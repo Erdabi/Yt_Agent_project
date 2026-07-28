@@ -34,7 +34,7 @@
     "7": {
       "class_type": "CLIPTextEncode",
       "inputs": {
-        "text": "text, watermark, logo, signature, low quality, blurry, deformed, static",
+        "text": "{{NEGATIVE_PROMPT}}",
         "clip": ["4", 1]
       }
     },

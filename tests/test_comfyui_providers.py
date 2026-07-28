@@ -105,6 +105,51 @@ def test_image_provider_full_flow_and_fills_placeholders():
     assert history_calls["n"] == 2  # confirms polling actually happened, not a lucky first hit
 
 
+def test_image_provider_honors_explicit_negative_prompt():
+    """negative_prompt is a real generate() parameter, not just a
+    template-baked default — a caller that passes one must see it reach
+    ComfyUI's negative CLIPTextEncode node untouched.
+    """
+
+    def fake_request(method, url, *, json=None, params=None, timeout=None):
+        if method == "POST" and url.endswith("/prompt"):
+            assert json["prompt"]["7"]["inputs"]["text"] == "extra fingers, bad anatomy"
+            return _FakeResponse(200, {"prompt_id": "img2", "node_errors": {}})
+        if "/history/img2" in url:
+            return _FakeResponse(
+                200,
+                {"img2": {"status": {"status_str": "success"}, "outputs": {"9": {"images": [{"filename": "a.png", "subfolder": "", "type": "output"}]}}}},
+            )
+        if url.endswith("/view"):
+            return _FakeResponse(200, content=b"BYTES")
+        raise AssertionError(f"unexpected call: {method} {url}")
+
+    with mock.patch("requests.request", side_effect=fake_request):
+        provider = ComfyUIImageProvider(config={"poll_interval_sec": 0.01}, api_key=None)
+        provider.generate("a red apple", negative_prompt="extra fingers, bad anatomy")
+
+
+def test_image_provider_defaults_negative_prompt_when_omitted():
+    def fake_request(method, url, *, json=None, params=None, timeout=None):
+        if method == "POST" and url.endswith("/prompt"):
+            # Never an empty string reaching ComfyUI when the caller
+            # (Asset Generation, Thumbnail Generation) passes nothing.
+            assert json["prompt"]["7"]["inputs"]["text"]
+            return _FakeResponse(200, {"prompt_id": "img3", "node_errors": {}})
+        if "/history/img3" in url:
+            return _FakeResponse(
+                200,
+                {"img3": {"status": {"status_str": "success"}, "outputs": {"9": {"images": [{"filename": "a.png", "subfolder": "", "type": "output"}]}}}},
+            )
+        if url.endswith("/view"):
+            return _FakeResponse(200, content=b"BYTES")
+        raise AssertionError(f"unexpected call: {method} {url}")
+
+    with mock.patch("requests.request", side_effect=fake_request):
+        provider = ComfyUIImageProvider(config={"poll_interval_sec": 0.01}, api_key=None)
+        provider.generate("a red apple")
+
+
 def test_video_provider_finds_output_under_gifs_key():
     def fake_request(method, url, *, json=None, params=None, timeout=None):
         if method == "POST" and url.endswith("/prompt"):

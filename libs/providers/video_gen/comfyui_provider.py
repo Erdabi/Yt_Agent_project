@@ -33,6 +33,11 @@ from .base import VideoGenProvider
 #: `"videos"` — tried in that order.
 _VIDEO_OUTPUT_KEYS = ("gifs", "videos")
 
+#: Used whenever a caller doesn't supply its own `negative_prompt` —
+#: Asset Generation (this provider's only current caller) passes none
+#: today, so the template's negative slot still needs *something*.
+_DEFAULT_NEGATIVE_PROMPT = "text, watermark, logo, signature, low quality, blurry, deformed, static"
+
 
 class ComfyUIVideoProvider(VideoGenProvider):
     def __init__(self, *, config: dict, api_key: str | None) -> None:
@@ -54,6 +59,7 @@ class ComfyUIVideoProvider(VideoGenProvider):
         self._frame_count = int(config.get("frame_count", 65))
         self._steps = int(config.get("steps", 20))
         self._seed = config.get("seed")
+        self._negative_prompt = config.get("negative_prompt", _DEFAULT_NEGATIVE_PROMPT)
 
     def generate(self, prompt: str, **kwargs: Any) -> bytes:
         seed = kwargs.get("seed", self._seed)
@@ -61,6 +67,7 @@ class ComfyUIVideoProvider(VideoGenProvider):
             seed = random.randint(0, 2**32 - 1)
         substitutions: dict[str, Any] = {
             "PROMPT": prompt,
+            "NEGATIVE_PROMPT": kwargs.get("negative_prompt") or self._negative_prompt,
             "WIDTH": int(kwargs.get("width", self._width)),
             "HEIGHT": int(kwargs.get("height", self._height)),
             "SEED": int(seed),
