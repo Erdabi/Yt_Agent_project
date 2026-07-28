@@ -58,16 +58,23 @@ def test_synthesize_returns_valid_mp3_with_no_word_timings(fake_kokoro_module):
     assert result.voice_id == "af_heart"
     assert result.language == "a"
 
-    # Real, decodable MP3 bytes — not just "some bytes".
+    # Real, decodable MP3 bytes — not just "some bytes". Written and
+    # closed before ffprobe runs (rather than kept open via
+    # NamedTemporaryFile) since Windows denies a second process access
+    # to a file another process still has open — POSIX allows it, so
+    # this only ever surfaced there.
+    import os
     import subprocess
     import tempfile
 
-    with tempfile.NamedTemporaryFile(suffix=".mp3") as f:
-        f.write(result.audio_bytes)
-        f.flush()
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        mp3_path = os.path.join(tmp_dir, "kokoro_test_output.mp3")
+        with open(mp3_path, "wb") as f:
+            f.write(result.audio_bytes)
+
         probe = subprocess.run(
             ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-             "-of", "default=noprint_wrappers=1:nokey=1", f.name],
+             "-of", "default=noprint_wrappers=1:nokey=1", mp3_path],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         )
     assert probe.returncode == 0, probe.stderr.decode()
