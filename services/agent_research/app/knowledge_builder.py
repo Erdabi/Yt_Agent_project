@@ -6,27 +6,28 @@ producing the structured package (verified facts, timeline, entities,
 citations, keywords, related topics, hooks, supporting notes — see
 libs/schemas/knowledge.py) the Script Agent will write from directly.
 
-The Claude call here is genuinely different in shape from every other
-call in this pipeline (reasoning.py, idea_generator.py), for one reason:
-"verified facts" and real citations require Claude to actually look
-something up, not recall it from parametric memory. So this call
-includes Anthropic's server-side `web_search`/`web_fetch` tools alongside
-the structured-output tool, and — critically — does **not** force
-`tool_choice` the way every other call in this codebase does. Forcing
-`tool_choice` to `propose_knowledge_package` would require Claude's very
-first action to be that tool call, leaving no room to search the web
-first. Leaving `tool_choice` at its default ("auto") lets Claude call
-web_search/web_fetch as many times as the topic needs — each one
-executed server-side by Anthropic within the same turn, no client-side
-work required — before finally calling `propose_knowledge_package` once
-it actually has something to report.
+The call here is genuinely different in shape from every other call in
+this pipeline (reasoning.py, idea_generator.py), for one reason:
+"verified facts" and real citations require the model to actually look
+something up, not recall it from parametric memory — so this passes
+`enable_web_research=True` to `generate_tool_call()` (libs/providers/llm/
+base.py), which lets a provider that has server-side web tools (Anthropic
+does; see anthropic_provider.py's `_generate_with_web_research`) use them
+across as many turns as the topic needs before finally reporting a
+package. All of that multi-turn mechanics (continuations on a
+`pause_turn`, tool wiring, summing usage across turns) lives inside the
+provider, not here — this module only ever sees one `LLMToolResult` back,
+the same as every other call site in this codebase.
 
-That freedom has a real cost: a long research turn can pause mid-way
-with `stop_reason: "pause_turn"` rather than finishing (see
-`shared/tool-use-concepts.md`'s server-tools guidance in the claude-api
-skill). This module handles that by resending the paused conversation
-with a bounded number of continuations, per Anthropic's documented
-pattern, rather than treating a pause as a failure.
+A provider with no such capability (e.g. Ollama/qwen3 — no local
+equivalent of server-side web search exists in this environment) still
+answers, best-effort, from its own parametric knowledge instead of
+raising (see `generate_tool_call`'s docstring) — which means a package
+built under a non-web-research-capable provider is not actually
+externally verified, whatever its `confidence`/`sources` fields claim.
+`_to_package` below appends an explicit caveat to `supporting_notes` in
+that case so nothing downstream (the Script Agent, a human operator)
+mistakes local-model recall for real citations.
 
 No deterministic fallback exists here, for the same reason
 IdeaGenerator has none — more so, in fact: fabricating "verified facts"
@@ -37,38 +38,33 @@ and fails the job honestly.
 
 from typing import Any
 
-import anthropic
-
-from libs.core.config import get_settings
 from libs.core.logging import get_logger
 from libs.llm_usage import track_llm_call
 from libs.prompts import PromptNotFoundError, PromptRenderError, get_prompt_loader
+from libs.providers.base import ProviderConfigError
+from libs.providers.llm.base import LLMProviderError, LLMToolCall
+from libs.providers.registry import get_provider
 from libs.schemas.knowledge import Entity, KnowledgePackage, TimelineEntry, VerifiedFact
 
 logger = get_logger(__name__)
 
 _PROMPT_PROVIDER = "claude"
 
-#: Server-side tools — Anthropic executes these itself within the same
-#: turn; there is no client-side function to implement for either. Exact
-#: tool-type strings and shape per the claude-api skill's
-#: shared/tool-use-concepts.md (dynamic-filtering versions, Opus 5).
-_WEB_SEARCH_TOOL = {"type": "web_search_20260209", "name": "web_search"}
-_WEB_FETCH_TOOL = {"type": "web_fetch_20260209", "name": "web_fetch"}
+#: Shown to whoever reads a package built without real web research —
+#: see this module's own docstring.
+_NO_WEB_RESEARCH_CAVEAT = (
+    "UNVERIFIED: the configured llm provider has no web research capability, "
+    "so this package reflects the model's own parametric knowledge, not "
+    "live-verified sources — treat every 'fact'/citation here as unconfirmed."
+)
 
-#: How many times to resend a `pause_turn`-interrupted research turn
-#: before giving up. Bounds worst-case latency/cost on a topic that keeps
-#: triggering long server-tool turns.
-_MAX_CONTINUATIONS = 3
-
-_PROPOSE_KNOWLEDGE_PACKAGE_TOOL = {
-    "name": "propose_knowledge_package",
-    "description": (
+_PROPOSE_KNOWLEDGE_PACKAGE_TOOL = LLMToolCall(
+    name="propose_knowledge_package",
+    description=(
         "Submit the completed knowledge package for this video topic, "
         "once research is actually done — not before."
     ),
-    "strict": True,
-    "input_schema": {
+    input_schema={
         "type": "object",
         "properties": {
             "summary": {
@@ -148,7 +144,7 @@ _PROPOSE_KNOWLEDGE_PACKAGE_TOOL = {
         ],
         "additionalProperties": False,
     },
-}
+)
 
 
 class KnowledgePackageError(RuntimeError):
@@ -160,15 +156,7 @@ class KnowledgePackageError(RuntimeError):
 
 class KnowledgeBuilder:
     def __init__(self) -> None:
-        settings = get_settings()
-        self._model = settings.anthropic_model
-        self._effort = settings.anthropic_effort
         self._prompts = get_prompt_loader()
-        self._client = (
-            anthropic.Anthropic(api_key=settings.anthropic_api_key)
-            if settings.anthropic_api_key
-            else None
-        )
 
     def build(
         self,
@@ -181,8 +169,10 @@ class KnowledgeBuilder:
         banned_topics: list[str] | None,
         existing_keywords: list[str] | None,
     ) -> KnowledgePackage:
-        if self._client is None:
-            raise KnowledgePackageError("ANTHROPIC_API_KEY is not configured")
+        try:
+            provider = get_provider("llm")
+        except ProviderConfigError as exc:
+            raise KnowledgePackageError(f"llm provider unavailable: {exc}") from exc
 
         try:
             system_template = self._prompts.get(
@@ -202,77 +192,39 @@ class KnowledgeBuilder:
         except (PromptNotFoundError, PromptRenderError) as exc:
             raise KnowledgePackageError(f"prompt template error: {exc}") from exc
 
-        raw = self._research_until_reported(
-            project_id, system_template.version, system_prompt, user_prompt
-        )
-        return self._to_package(raw, topic=topic, niche=channel_niche)
+        try:
+            with track_llm_call(
+                project_id=project_id,
+                agent_name="research",
+                call_site="knowledge_builder.build",
+                provider=type(provider).__name__,
+                model=provider.model,
+                prompt_name="build_knowledge_package",
+                prompt_version=system_template.version,
+            ) as usage:
+                result = provider.generate_tool_call(
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    tool=_PROPOSE_KNOWLEDGE_PACKAGE_TOOL,
+                    enable_web_research=True,
+                )
+                usage["input_tokens"] = result.input_tokens
+                usage["output_tokens"] = result.output_tokens
+        except LLMProviderError as exc:
+            logger.error("knowledge_builder_call_failed", error=str(exc))
+            raise KnowledgePackageError(f"LLM call failed: {exc}") from exc
 
-    def _research_until_reported(
-        self, project_id: str, prompt_version: str, system_prompt: str, user_prompt: str
-    ) -> dict[str, Any]:
-        messages: list[dict[str, Any]] = [{"role": "user", "content": user_prompt}]
-
-        for attempt in range(_MAX_CONTINUATIONS + 1):
-            try:
-                # Each turn of this loop is its own separate billable API
-                # call (a `pause_turn` continuation resends the whole
-                # conversation so far) — so it gets its own usage-log row,
-                # not just one for the whole method.
-                with track_llm_call(
-                    project_id=project_id,
-                    agent_name="research",
-                    call_site="knowledge_builder.build",
-                    model=self._model,
-                    prompt_name="build_knowledge_package",
-                    prompt_version=prompt_version,
-                ) as usage:
-                    response = self._client.messages.create(
-                        model=self._model,
-                        max_tokens=8192,
-                        output_config={"effort": self._effort},
-                        system=system_prompt,
-                        tools=[_WEB_SEARCH_TOOL, _WEB_FETCH_TOOL, _PROPOSE_KNOWLEDGE_PACKAGE_TOOL],
-                        messages=messages,
-                    )
-                    usage["input_tokens"] = response.usage.input_tokens
-                    usage["output_tokens"] = response.usage.output_tokens
-            except anthropic.APIError as exc:
-                logger.error("knowledge_builder_call_failed", error=str(exc), attempt=attempt)
-                raise KnowledgePackageError(f"Claude API call failed: {exc}") from exc
-
-            if response.stop_reason == "refusal":
-                logger.warning("knowledge_builder_refusal")
-                raise KnowledgePackageError("Claude declined to respond")
-
-            tool_use = next(
-                (
-                    block
-                    for block in response.content
-                    if block.type == "tool_use" and block.name == "propose_knowledge_package"
-                ),
-                None,
-            )
-            if tool_use is not None:
-                return tool_use.input
-
-            if response.stop_reason == "pause_turn":
-                logger.info("knowledge_builder_pause_turn_continuing", attempt=attempt)
-                messages.append({"role": "assistant", "content": response.content})
-                continue
-
-            logger.error(
-                "knowledge_builder_no_tool_use", stop_reason=response.stop_reason, attempt=attempt
-            )
-            raise KnowledgePackageError(
-                f"Claude did not return a knowledge package (stop_reason={response.stop_reason})"
-            )
-
-        raise KnowledgePackageError(
-            f"Claude did not finish researching within {_MAX_CONTINUATIONS} continuations"
+        return self._to_package(
+            result.tool_input,
+            topic=topic,
+            niche=channel_niche,
+            used_web_research=result.used_web_research,
         )
 
     @staticmethod
-    def _to_package(raw: dict[str, Any], *, topic: str, niche: str) -> KnowledgePackage:
+    def _to_package(
+        raw: dict[str, Any], *, topic: str, niche: str, used_web_research: bool
+    ) -> KnowledgePackage:
         facts = [VerifiedFact(**f) for f in raw["verified_facts"]]
         timeline = [TimelineEntry(**t) for t in raw["timeline"]]
         entities = [Entity(**e) for e in raw["entities"]]
@@ -285,6 +237,10 @@ class KnowledgeBuilder:
                     seen.add(url)
                     citations.append(url)
 
+        supporting_notes = raw["supporting_notes"]
+        if not used_web_research:
+            supporting_notes = f"{_NO_WEB_RESEARCH_CAVEAT}\n\n{supporting_notes}"
+
         return KnowledgePackage(
             topic=topic,
             niche=niche,
@@ -296,5 +252,5 @@ class KnowledgeBuilder:
             keywords=raw["keywords"],
             related_topics=raw["related_topics"],
             hooks=raw["hooks"],
-            supporting_notes=raw["supporting_notes"],
+            supporting_notes=supporting_notes,
         )

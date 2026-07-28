@@ -1,4 +1,4 @@
-"""Claude-backed script generation for the Script Agent.
+"""LLM-backed script generation for the Script Agent.
 
 Turns one researched, approved video idea — delivered as a single
 `ProjectContext` (libs/context) rather than queried piecemeal — into a
@@ -17,24 +17,27 @@ runs `script_reviewer.py`'s self-review pass on this draft afterward
 before persisting — see that module for why review is a separate,
 best-effort step rather than folded into this call.
 
-Both prompts sent to Claude are loaded at runtime from the Prompt
+Both prompts sent to the model are loaded at runtime from the Prompt
 Management System (libs/prompts) — see
 prompts/script/generate_script_system/ and
 prompts/script/generate_script_user/ — following the same forced
 tool-use, no-fallback pattern as
-services/agent_research/app/idea_generator.py: a missing API key, a
-failed call, a refusal, or a malformed response all raise
+services/agent_research/app/idea_generator.py: a missing/misconfigured
+provider, a failed call, a refusal, or a malformed response all raise
 `ScriptGenerationError` instead of returning a placeholder script —
 inventing a fake script would defeat the entire purpose of this agent.
+The model itself is whichever `llm` provider config/providers.yaml has
+active (Ollama by default) — this module never imports a vendor SDK
+directly, only `libs.providers.get_provider("llm")`.
 """
 
-import anthropic
-
 from libs.context import ProjectContext
-from libs.core.config import get_settings
 from libs.core.logging import get_logger
 from libs.llm_usage import track_llm_call
 from libs.prompts import PromptNotFoundError, PromptRenderError, get_prompt_loader
+from libs.providers.base import ProviderConfigError
+from libs.providers.llm.base import LLMProviderError, LLMToolCall
+from libs.providers.registry import get_provider
 
 from .script_schema import (
     SCRIPT_CONTENT_PROPERTIES,
@@ -59,32 +62,27 @@ class ScriptGenerationError(RuntimeError):
     """
 
 
-_PROPOSE_SCRIPT_TOOL = {
-    "name": "propose_script",
-    "description": "Propose a complete, structured YouTube video script ready for production.",
-    "strict": True,
-    "input_schema": {
+_PROPOSE_SCRIPT_TOOL = LLMToolCall(
+    name="propose_script",
+    description="Propose a complete, structured YouTube video script ready for production.",
+    input_schema={
         "type": "object",
         "properties": SCRIPT_CONTENT_PROPERTIES,
         "required": SCRIPT_CONTENT_REQUIRED,
         "additionalProperties": False,
     },
-}
+)
 
 
 class ScriptGenerator:
     def __init__(self) -> None:
-        settings = get_settings()
         self._prompts = get_prompt_loader()
-        self._client = (
-            anthropic.Anthropic(api_key=settings.anthropic_api_key)
-            if settings.anthropic_api_key
-            else None
-        )
 
     def generate(self, context: ProjectContext) -> GeneratedScript:
-        if self._client is None:
-            raise ScriptGenerationError("ANTHROPIC_API_KEY is not configured")
+        try:
+            provider = get_provider("llm")
+        except ProviderConfigError as exc:
+            raise ScriptGenerationError(f"llm provider unavailable: {exc}") from exc
 
         try:
             system_template = self._prompts.get(
@@ -124,41 +122,25 @@ class ScriptGenerator:
                 project_id=context.project.project_id,
                 agent_name="script",
                 call_site="script_generator.generate",
-                model=context.manager.anthropic_model,
+                provider=type(provider).__name__,
+                model=provider.model,
                 prompt_name="generate_script",
                 prompt_version=system_template.version,
             ) as usage:
-                response = self._client.messages.create(
-                    model=context.manager.anthropic_model,
-                    max_tokens=8192,
-                    output_config={"effort": context.manager.anthropic_effort},
-                    system=system_prompt,
-                    tools=[_PROPOSE_SCRIPT_TOOL],
-                    tool_choice={"type": "tool", "name": "propose_script"},
-                    messages=[{"role": "user", "content": user_prompt}],
+                result = provider.generate_tool_call(
+                    system_prompt=system_prompt, user_prompt=user_prompt, tool=_PROPOSE_SCRIPT_TOOL,
                 )
-                usage["input_tokens"] = response.usage.input_tokens
-                usage["output_tokens"] = response.usage.output_tokens
-        except anthropic.APIError as exc:
+                usage["input_tokens"] = result.input_tokens
+                usage["output_tokens"] = result.output_tokens
+        except LLMProviderError as exc:
             logger.error("script_generator_call_failed", error=str(exc))
-            raise ScriptGenerationError(f"Claude API call failed: {exc}") from exc
+            raise ScriptGenerationError(f"LLM call failed: {exc}") from exc
 
-        if response.stop_reason == "refusal":
-            logger.warning("script_generator_refusal")
-            raise ScriptGenerationError("Claude declined to respond")
-
-        tool_use = next((block for block in response.content if block.type == "tool_use"), None)
-        if tool_use is None:
-            logger.error("script_generator_no_tool_use", stop_reason=response.stop_reason)
-            raise ScriptGenerationError(
-                f"Claude did not return a script (stop_reason={response.stop_reason})"
-            )
-
-        if not tool_use.input["main_sections"]:
-            raise ScriptGenerationError("Claude returned a script with no main sections")
+        if not result.tool_input["main_sections"]:
+            raise ScriptGenerationError("the model returned a script with no main sections")
 
         try:
-            return script_from_dict(tool_use.input)
+            return script_from_dict(result.tool_input)
         except ValueError as exc:
             logger.error("script_generator_invalid_script", error=str(exc))
             raise ScriptGenerationError(str(exc)) from exc

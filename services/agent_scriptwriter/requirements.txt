@@ -1,6 +1,10 @@
 -r ../../requirements/base.txt
 
-# The Script Agent's generation call (app/script_generator.py) calls the
-# Claude API directly, same as the Manager Agent's reasoning engine and
-# the Research Agent's idea generation.
+# The Script Agent's generation/review calls (app/script_generator.py,
+# app/script_reviewer.py) call the configured `llm` provider
+# (libs.providers.get_provider("llm")) — Ollama by default
+# (libs/providers/llm/ollama_provider.py, `requests`-based, no extra
+# dependency beyond the one below); anthropic remains available as a
+# swappable paid-vendor alternative (config/providers.yaml).
+requests==2.32.3
 anthropic==0.120.0

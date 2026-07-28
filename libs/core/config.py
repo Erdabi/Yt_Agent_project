@@ -81,6 +81,17 @@ class Settings(BaseSettings):
     anthropic_model: str = Field(default="claude-opus-5", alias="ANTHROPIC_MODEL")
     anthropic_effort: str = Field(default="low", alias="ANTHROPIC_EFFORT")
 
+    # --- Local providers: Ollama (llm), ComfyUI (video_gen/image_gen) ----
+    # Defaults for libs/providers/llm/ollama_provider.py and
+    # libs/providers/{video_gen,image_gen}/comfyui_provider.py — both
+    # local, self-hosted services with no API key, unlike every vendor
+    # above. config/providers.yaml's own `config:` blocks can override
+    # these per-provider without touching this file; these settings exist
+    # only as the fallback when a provider entry omits them.
+    ollama_url: str = Field(default="http://127.0.0.1:11434", alias="OLLAMA_URL")
+    ollama_model: str = Field(default="qwen3:32b", alias="OLLAMA_MODEL")
+    comfyui_url: str = Field(default="http://127.0.0.1:8188", alias="COMFYUI_URL")
+
     # --- Analytics Agent: independent scheduling -------------------------
     # How often the Analytics Agent's own Celery beat schedule sweeps
     # `PUBLISHED` projects (services/agent_analytics/app/worker.py). Not

@@ -79,6 +79,7 @@ def run_llm_review(
         project_id=project_id,
         agent_name="qa",
         call_site=f"{category}_reviewer.review",
+        provider=type(provider).__name__,
         model=provider.model,
         prompt_name=prompt_name,
         prompt_version=prompt_version,

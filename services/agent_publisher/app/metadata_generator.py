@@ -136,6 +136,7 @@ class MetadataGenerator:
                 project_id=project_id,
                 agent_name="publish",
                 call_site="metadata_generator.generate",
+                provider=type(provider).__name__,
                 model=provider.model,
                 prompt_name="refine_metadata",
                 prompt_version=system_template.version,

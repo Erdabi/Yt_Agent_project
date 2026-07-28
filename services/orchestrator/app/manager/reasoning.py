@@ -1,40 +1,44 @@
-"""Claude-backed reasoning engine for workflow decisions.
+"""LLM-backed reasoning engine for workflow decisions.
 
 The Manager's decision at every stage transition — advance, retry,
-escalate, or abort — is made by calling Claude with the outcome of the
-project's most recently finished stage. The fixed plan (workflow.py) is
-ground truth for *what "advance" means*; Claude's job is judgment, not
-routing — that matters most on failure, where "is this worth retrying" is
-a real call a hardcoded rule can't make well: a rate-limit error and a
-permanent configuration error can look identical to a naive string match,
-but call for opposite responses.
+escalate, or abort — is made by calling the configured `llm` provider
+(libs/providers/llm/ — Ollama by default, Anthropic/others a
+config/providers.yaml edit away) with the outcome of the project's most
+recently finished stage. The fixed plan (workflow.py) is ground truth for
+*what "advance" means*; the model's job is judgment, not routing — that
+matters most on failure, where "is this worth retrying" is a real call a
+hardcoded rule can't make well: a rate-limit error and a permanent
+configuration error can look identical to a naive string match, but call
+for opposite responses.
 
-Both prompts sent to Claude — the system prompt and the per-decision
+Both prompts sent to the model — the system prompt and the per-decision
 context — are loaded at runtime from the Prompt Management System
 (libs/prompts) rather than embedded as Python string constants here; see
 prompts/manager/workflow_decision_system/ and
 prompts/manager/workflow_decision_user/. This is what lets the wording be
-tuned, versioned (MANAGER_PROMPT_VERSION), or given Claude-specific
+tuned, versioned (MANAGER_PROMPT_VERSION), or given provider-specific
 phrasing (v1.claude.yaml) without a code change. The tool's JSON schema
 below stays in Python: it's a structural API contract (types, required
 fields, strict validation), not natural-language template content.
 
-If the Claude API call itself fails — network error, exhausted retries,
-a safety refusal — this falls back to a small deterministic rule instead
-of raising, so a reasoning-engine outage can never wedge the pipeline.
-That fallback is also exactly what runs when no API key is configured at
-all, which is what this module's tests exercise without a live key.
+If the LLM call itself fails — network error, exhausted retries, a
+missing/misconfigured provider, a safety refusal — this falls back to a
+small deterministic rule instead of raising, so a reasoning-engine outage
+can never wedge the pipeline. That fallback is also exactly what runs
+when no provider is reachable at all, which is what this module's tests
+exercise without a live one.
 """
 
 from dataclasses import dataclass
-
-import anthropic
 
 from libs.core.config import get_settings
 from libs.core.logging import get_logger
 from libs.llm_usage import track_llm_call
 from libs.models.enums import JobStatus
 from libs.prompts import PromptNotFoundError, PromptRenderError, get_prompt_loader
+from libs.providers.base import ProviderConfigError
+from libs.providers.llm.base import LLMProviderError, LLMToolCall
+from libs.providers.registry import get_provider
 
 logger = get_logger(__name__)
 
@@ -52,14 +56,13 @@ class Decision:
     reasoning: str
 
 
-_DECIDE_ACTION_TOOL = {
-    "name": "decide_workflow_action",
-    "description": (
+_DECIDE_ACTION_TOOL = LLMToolCall(
+    name="decide_workflow_action",
+    description=(
         "Decide what the pipeline manager should do next for a project, "
         "given the outcome of its most recently completed stage."
     ),
-    "strict": True,
-    "input_schema": {
+    input_schema={
         "type": "object",
         "properties": {
             "action": {
@@ -89,7 +92,7 @@ _DECIDE_ACTION_TOOL = {
         "required": ["action", "reasoning"],
         "additionalProperties": False,
     },
-}
+)
 
 
 #: The provider identifier this engine requests from the Prompt
@@ -103,16 +106,8 @@ _PROMPT_PROVIDER = "claude"
 
 class ReasoningEngine:
     def __init__(self) -> None:
-        settings = get_settings()
-        self._model = settings.anthropic_model
-        self._effort = settings.anthropic_effort
-        self._prompt_version = settings.manager_prompt_version
+        self._prompt_version = get_settings().manager_prompt_version
         self._prompts = get_prompt_loader()
-        self._client = (
-            anthropic.Anthropic(api_key=settings.anthropic_api_key)
-            if settings.anthropic_api_key
-            else None
-        )
 
     def decide(
         self,
@@ -126,9 +121,12 @@ class ReasoningEngine:
         max_retries: int,
         next_stage: str | None,
     ) -> Decision:
-        if self._client is None:
+        try:
+            provider = get_provider("llm")
+        except ProviderConfigError as exc:
+            logger.error("reasoning_engine_provider_unavailable", error=str(exc))
             return self._fallback(
-                job_status, retry_count, max_retries, reason="ANTHROPIC_API_KEY is not configured"
+                job_status, retry_count, max_retries, reason=f"llm provider unavailable: {exc}"
             )
 
         try:
@@ -168,44 +166,23 @@ class ReasoningEngine:
                 project_id=project_id,
                 agent_name="manager",
                 call_site="reasoning.decide",
-                model=self._model,
+                provider=type(provider).__name__,
+                model=provider.model,
                 prompt_name="workflow_decision",
                 prompt_version=system_template.version,
             ) as usage:
-                response = self._client.messages.create(
-                    model=self._model,
-                    max_tokens=4096,
-                    output_config={"effort": self._effort},
-                    system=system_prompt,
-                    tools=[_DECIDE_ACTION_TOOL],
-                    tool_choice={"type": "tool", "name": "decide_workflow_action"},
-                    messages=[{"role": "user", "content": prompt}],
+                result = provider.generate_tool_call(
+                    system_prompt=system_prompt, user_prompt=prompt, tool=_DECIDE_ACTION_TOOL,
                 )
-                usage["input_tokens"] = response.usage.input_tokens
-                usage["output_tokens"] = response.usage.output_tokens
-        except anthropic.APIError as exc:
+                usage["input_tokens"] = result.input_tokens
+                usage["output_tokens"] = result.output_tokens
+        except LLMProviderError as exc:
             logger.error("reasoning_engine_call_failed", error=str(exc))
             return self._fallback(
-                job_status, retry_count, max_retries, reason=f"Claude API call failed: {exc}"
+                job_status, retry_count, max_retries, reason=f"LLM call failed: {exc}"
             )
 
-        if response.stop_reason == "refusal":
-            logger.warning("reasoning_engine_refusal")
-            return self._fallback(
-                job_status, retry_count, max_retries, reason="Claude declined to respond"
-            )
-
-        tool_use = next((block for block in response.content if block.type == "tool_use"), None)
-        if tool_use is None:
-            logger.error("reasoning_engine_no_tool_use", stop_reason=response.stop_reason)
-            return self._fallback(
-                job_status,
-                retry_count,
-                max_retries,
-                reason=f"Claude did not return a decision (stop_reason={response.stop_reason})",
-            )
-
-        return Decision(action=tool_use.input["action"], reasoning=tool_use.input["reasoning"])
+        return Decision(action=result.tool_input["action"], reasoning=result.tool_input["reasoning"])
 
     @staticmethod
     def _fallback(job_status: str, retry_count: int, max_retries: int, *, reason: str) -> Decision:

@@ -1,7 +1,9 @@
 -r ../../requirements/base.txt
 
 # The Quality Control Agent's reviewers (app/reviewers/) call the
-# configured `llm` provider (libs/providers/llm/), whose real
-# implementation (libs/providers/llm/anthropic_provider.py) calls the
-# Claude API directly, same as the Research/Script Agents' own LLM calls.
+# configured `llm` provider (libs/providers/llm/) — Ollama by default
+# (libs/providers/llm/ollama_provider.py, `requests`-based, no extra
+# dependency beyond the one below); anthropic remains available as a
+# swappable paid-vendor alternative (config/providers.yaml).
+requests==2.32.3
 anthropic==0.120.0

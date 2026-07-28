@@ -26,21 +26,25 @@
 # (no per-channel DB-driven override) — same as `youtube` below, which
 # isn't either.
 #
-# `video_gen` also now has one real, working adapter alongside its
-# stub: `runway` (libs/providers/video_gen/runway_provider.py), against
-# Runway's public developer API — a genuine paid vendor account is still
-# required (RUNWAY_API_KEY), so `active` stays `stub` here until one is
-# configured. `invideo` and `veo` remain honest stubs: neither has a
+# `video_gen` also now has two real, working adapters alongside its
+# stub: `comfyui` (libs/providers/video_gen/comfyui_provider.py) — a
+# local, self-hosted ComfyUI Desktop instance, no API key, no paid
+# account, and the default here — and `runway`
+# (libs/providers/video_gen/runway_provider.py), against Runway's public
+# developer API, for when a genuine paid vendor account is preferred over
+# local generation. `invideo` and `veo` remain honest stubs: neither has a
 # public API contract this codebase could verify (invideo) or that this
 # codebase has real GCP credentials to implement against (veo) — see
 # each module's own docstring.
 #
-# `tts` similarly has one real, working adapter alongside its stub:
-# `elevenlabs` (libs/providers/tts/elevenlabs_provider.py), against
-# ElevenLabs' public API — `active` stays `stub` here until a real
-# ELEVENLABS_API_KEY is configured. `azure_speech` remains an honest
-# stub for the same reason as `invideo`/`veo`: no Azure resource exists
-# here to implement and verify a real token-based integration against.
+# `tts` similarly has two real, working adapters alongside its stub:
+# `kokoro` (libs/providers/tts/kokoro_provider.py) — a local, self-hosted
+# Kokoro-82M install, no API key, and the default here — and `elevenlabs`
+# (libs/providers/tts/elevenlabs_provider.py), against ElevenLabs'
+# public API, for a paid-vendor alternative. `azure_speech` remains an
+# honest stub for the same reason as `invideo`/`veo`: no Azure resource
+# exists here to implement and verify a real token-based integration
+# against.
 #
 # Every capability's active provider can also be overridden per-process
 # without editing this file at all, via an environment variable named
@@ -48,16 +52,35 @@
 # libs/providers/registry.py ahead of the `active:` line below.
 
 video_gen:
-  # Stays the default here so the repo boots without any video_gen API
-  # key configured — flip this to "runway" (a real, working adapter) once
+  # Local-first default: ComfyUI Desktop needs no API key/paid account,
+  # so it's safe to default to here the way `elevenlabs`/`runway` never
+  # could be. Flip to "runway" (a real, working cloud adapter) once
   # RUNWAY_API_KEY is set, or override per-environment with the
   # VIDEO_GEN_PROVIDER env var (libs/providers/registry.py) without
   # touching this file at all.
-  active: stub
+  active: comfyui
   providers:
-    stub:
-      class: libs.providers.video_gen.stub_provider.StubVideoGenProvider
-      config: {}
+    # Real, working adapter (libs/providers/video_gen/comfyui_provider.py)
+    # against a local ComfyUI Desktop instance's HTTP API — no vendor
+    # account, no API key. Which actual node graph runs is
+    # config/comfyui/text_to_video.json (see that directory's README for
+    # the placeholder convention and an important caveat: unlike
+    # text_to_image.json's stable core-node graph, real text-to-video
+    # generation depends entirely on which custom nodes/checkpoint you
+    # have installed, so that template is a starting point to replace
+    # with your own exported workflow, not a verified one).
+    comfyui:
+      class: libs.providers.video_gen.comfyui_provider.ComfyUIVideoProvider
+      config:
+        base_url: http://127.0.0.1:8188
+        workflow_template: config/comfyui/text_to_video.json
+        width: 1280
+        height: 720
+        frame_count: 65
+        steps: 20
+        poll_interval_sec: 3
+        poll_timeout_sec: 900
+      # No secret_ref: a local ComfyUI instance needs no API key.
     # Real, working adapter (libs/providers/video_gen/runway_provider.py)
     # against Runway's public developer API (docs.dev.runwayml.com).
     runway:
@@ -69,6 +92,9 @@ video_gen:
         poll_interval_sec: 5
         poll_timeout_sec: 300
       secret_ref: RUNWAY_API_KEY
+    stub:
+      class: libs.providers.video_gen.stub_provider.StubVideoGenProvider
+      config: {}
     # Honest stub (libs/providers/video_gen/invideo_provider.py) — no
     # verifiable public API contract exists to implement against yet;
     # see that module's docstring.
@@ -88,16 +114,23 @@ video_gen:
       secret_ref: GOOGLE_VEO_API_KEY
 
 tts:
-  # Stays the default here so the repo boots without any tts API key
-  # configured — flip this to "elevenlabs" (a real, working adapter)
-  # once ELEVENLABS_API_KEY is set, or override per-environment with the
-  # TTS_PROVIDER env var (libs/providers/registry.py) without touching
-  # this file at all.
-  active: stub
+  # Local-first default: Kokoro needs no API key/paid account. Flip to
+  # "elevenlabs" (a real, working cloud adapter) once ELEVENLABS_API_KEY
+  # is set, or override per-environment with the TTS_PROVIDER env var
+  # (libs/providers/registry.py) without touching this file at all.
+  active: kokoro
   providers:
-    stub:
-      class: libs.providers.tts.stub_provider.StubTTSProvider
-      config: {}
+    # Real, working adapter (libs/providers/tts/kokoro_provider.py)
+    # against a local Kokoro-82M install (github.com/hexgrad/kokoro) — no
+    # vendor account, no API key, no network call.
+    kokoro:
+      class: libs.providers.tts.kokoro_provider.KokoroTTSProvider
+      config:
+        lang_code: a  # American English — see kokoro_provider.py's docstring for other codes
+        voice: af_heart
+        speed: 1.0
+        sample_rate: 24000
+      # No secret_ref: a local Kokoro install needs no API key.
     # Real, working adapter (libs/providers/tts/elevenlabs_provider.py)
     # against ElevenLabs' public API (elevenlabs.io/docs/api-reference).
     elevenlabs:
@@ -110,6 +143,9 @@ tts:
         retry_backoff_sec: 2
         timeout_sec: 60
       secret_ref: ELEVENLABS_API_KEY
+    stub:
+      class: libs.providers.tts.stub_provider.StubTTSProvider
+      config: {}
     # Honest stub (libs/providers/tts/azure_speech_provider.py) — needs a
     # real Azure resource (region + access-token exchange) to implement
     # and verify against; see that module's docstring.
@@ -121,12 +157,31 @@ tts:
       secret_ref: AZURE_SPEECH_API_KEY
 
 image_gen:
-  active: stub
+  # Local-first default: ComfyUI Desktop needs no API key/paid account.
+  # Override per-environment with the IMAGE_GEN_PROVIDER env var
+  # (libs/providers/registry.py) without touching this file at all.
+  active: comfyui
   providers:
+    # Real, working adapter (libs/providers/image_gen/comfyui_provider.py)
+    # against a local ComfyUI Desktop instance's HTTP API — no vendor
+    # account, no API key. Which actual node graph runs is
+    # config/comfyui/text_to_image.json (core nodes only, no custom node
+    # installs needed — see that directory's README).
+    comfyui:
+      class: libs.providers.image_gen.comfyui_provider.ComfyUIImageProvider
+      config:
+        base_url: http://127.0.0.1:8188
+        workflow_template: config/comfyui/text_to_image.json
+        width: 1280
+        height: 720
+        steps: 20
+        poll_interval_sec: 2
+        poll_timeout_sec: 300
+      # No secret_ref: a local ComfyUI instance needs no API key.
     stub:
       class: libs.providers.image_gen.stub_provider.StubImageGenProvider
       config: {}
-  # Real provider example (Stability AI — Phase 1/4): add
+  # Real cloud-vendor provider example (Stability AI — Phase 1/4): add
   # libs/providers/image_gen/stability_provider.py subclassing
   # ImageGenProvider, then:
   #   stability:
@@ -234,15 +289,33 @@ editor:
   # touched.
 
 llm:
-  # Unlike every other capability above, Anthropic is already a hard
-  # requirement elsewhere in this system (the Manager's reasoning
-  # engine, Research/Script Agent calls all use it directly) — defaulting
-  # to "anthropic" rather than "stub" doesn't introduce a new paid-vendor
-  # dependency, it just makes an already-required one swappable through
-  # this same registry mechanism. First real consumer:
-  # services/agent_qa/app/ (the Quality Control Agent's reviewers).
-  active: anthropic
+  # Local-first default: a local Ollama install needs no API key/paid
+  # account, unlike every cloud vendor below — every reasoning call site
+  # in this codebase (Research's IdeaGenerator/KnowledgeBuilder, the
+  # Script Agent's ScriptGenerator/ScriptReviewer, the Manager's
+  # reasoning engine, the Thumbnail Agent's ThumbnailConceptGenerator,
+  # the Quality Control Agent's reviewers) routes through
+  # `libs.providers.get_provider("llm")`, never a hardcoded vendor SDK
+  # import, so this is a one-line switch away from Anthropic (or a
+  # future OpenAI provider) rather than a code change anywhere.
+  active: ollama
   providers:
+    # Real, working adapter (libs/providers/llm/ollama_provider.py)
+    # against a local Ollama install (ollama.com) — no vendor account,
+    # no API key, no network call beyond localhost.
+    ollama:
+      class: libs.providers.llm.ollama_provider.OllamaLLMProvider
+      # model/base_url default to OLLAMA_MODEL/OLLAMA_URL
+      # (libs/core/config.py) when omitted here.
+      config: {}
+      # No secret_ref: a local Ollama install needs no API key.
+    # Real, working adapter (libs/providers/llm/anthropic_provider.py)
+    # against the Anthropic API, for a paid-vendor alternative to local
+    # inference (e.g. Research's KnowledgeBuilder needs Anthropic's
+    # server-side web_search/web_fetch tools for genuinely *verified*
+    # facts — see generate_tool_call's enable_web_research docstring in
+    # libs/providers/llm/base.py — since no local model here has an
+    # equivalent web-research capability).
     anthropic:
       class: libs.providers.llm.anthropic_provider.AnthropicLLMProvider
       # model/effort default to ANTHROPIC_MODEL/ANTHROPIC_EFFORT

@@ -9,18 +9,31 @@
 # image locally rather than through any provider.
 Pillow==12.3.0
 
-# libs/providers/video_gen/runway_provider.py's real Runway ML adapter —
-# the first provider in this codebase to make outbound HTTP calls to a
-# vendor REST API (every prior provider was either a stub or, like
-# ffmpeg, shells out to a local binary instead).
+# libs/providers/video_gen/runway_provider.py's real Runway ML adapter,
+# and libs/providers/video_gen/{,image_gen}/comfyui_provider.py's real
+# local ComfyUI adapters (the active default — see
+# config/providers.yaml) — all three talk to their respective HTTP APIs
+# via plain `requests`, no vendor SDK.
 requests==2.32.3
 
-# thumbnail_concept_generator.py calls the Claude API directly for
-# concept generation, same as the Research/Script Agents' own LLM calls.
+# libs/providers/tts/kokoro_provider.py's real local Kokoro-82M adapter
+# (the active tts default — see config/providers.yaml) — runs entirely
+# on-device via the `kokoro` package's `KPipeline`, no network call.
+# numpy concatenates/converts its per-chunk audio arrays before
+# transcoding to mp3 via the ffmpeg binary above.
+kokoro
+numpy
+
+# get_provider("llm") (thumbnail_concept_generator.py) resolves to
+# whichever `llm` provider config/providers.yaml has active — Ollama by
+# default (libs/providers/llm/ollama_provider.py, also `requests`-based,
+# no extra dependency); anthropic remains available as a swappable
+# paid-vendor alternative.
 anthropic==0.120.0
 
 # Still stub implementations, waiting on real vendor integrations
-# (docs/architecture/06-roadmap.md): asset_generation.py (stock-media/
-# image-gen/audio-library client libraries), voice_generation.py (TTS
-# provider SDK). video_gen itself now has one real adapter (Runway) plus
-# two honest stubs (InVideo, Veo) — see libs/providers/video_gen/.
+# (docs/architecture/06-roadmap.md): asset_generation.py's
+# stock_media/audio_library capabilities. video_gen/image_gen
+# themselves each now have a real local adapter (ComfyUI, the active
+# default) plus real/honest-stub cloud alternatives — see
+# libs/providers/{video_gen,image_gen}/.

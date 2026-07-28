@@ -12,24 +12,24 @@ needed and left alone where it already worked.
 Unlike script_generator.py, a failure here does not fail the job: the
 draft it's reviewing is already a valid, complete script, and review is
 an enhancement on top of it, not the core deliverable. If the review
-call fails for any reason (no API key, a prompt error, an API error, a
-refusal, or a malformed response), this logs a warning and returns the
-original draft unchanged — with `review_notes` recording that review was
-skipped and why, rather than raising. A "lightweight" review step must
-not become a hard dependency that can block an already-good script from
-being persisted.
+call fails for any reason (no llm provider configured, a prompt error,
+an API error, a refusal, or a malformed response), this logs a warning
+and returns the original draft unchanged — with `review_notes` recording
+that review was skipped and why, rather than raising. A "lightweight"
+review step must not become a hard dependency that can block an
+already-good script from being persisted.
 """
 
 import dataclasses
 import json
 
-import anthropic
-
 from libs.context import ProjectContext
-from libs.core.config import get_settings
 from libs.core.logging import get_logger
 from libs.llm_usage import track_llm_call
 from libs.prompts import PromptNotFoundError, PromptRenderError, get_prompt_loader
+from libs.providers.base import ProviderConfigError
+from libs.providers.llm.base import LLMProviderError, LLMToolCall
+from libs.providers.registry import get_provider
 
 from .script_schema import (
     SCRIPT_CONTENT_PROPERTIES,
@@ -47,11 +47,10 @@ logger = get_logger(__name__)
 #: reasoning.py's `_PROMPT_PROVIDER` for the identical rationale.
 _PROMPT_PROVIDER = "claude"
 
-_SUBMIT_REVIEWED_SCRIPT_TOOL = {
-    "name": "submit_reviewed_script",
-    "description": "Submit the reviewed (and, where needed, corrected) script, complete.",
-    "strict": True,
-    "input_schema": {
+_SUBMIT_REVIEWED_SCRIPT_TOOL = LLMToolCall(
+    name="submit_reviewed_script",
+    description="Submit the reviewed (and, where needed, corrected) script, complete.",
+    input_schema={
         "type": "object",
         "properties": {
             **SCRIPT_CONTENT_PROPERTIES,
@@ -67,22 +66,18 @@ _SUBMIT_REVIEWED_SCRIPT_TOOL = {
         "required": [*SCRIPT_CONTENT_REQUIRED, "review_notes"],
         "additionalProperties": False,
     },
-}
+)
 
 
 class ScriptReviewer:
     def __init__(self) -> None:
-        settings = get_settings()
         self._prompts = get_prompt_loader()
-        self._client = (
-            anthropic.Anthropic(api_key=settings.anthropic_api_key)
-            if settings.anthropic_api_key
-            else None
-        )
 
     def review(self, context: ProjectContext, draft: GeneratedScript) -> GeneratedScript:
-        if self._client is None:
-            return self._skipped(draft, "ANTHROPIC_API_KEY is not configured")
+        try:
+            provider = get_provider("llm")
+        except ProviderConfigError as exc:
+            return self._skipped(draft, f"llm provider unavailable: {exc}")
 
         try:
             system_template = self._prompts.get(
@@ -114,42 +109,28 @@ class ScriptReviewer:
                 project_id=context.project.project_id,
                 agent_name="script",
                 call_site="script_reviewer.review",
-                model=context.manager.anthropic_model,
+                provider=type(provider).__name__,
+                model=provider.model,
                 prompt_name="review_script",
                 prompt_version=system_template.version,
             ) as usage:
-                response = self._client.messages.create(
-                    model=context.manager.anthropic_model,
-                    max_tokens=8192,
-                    output_config={"effort": context.manager.anthropic_effort},
-                    system=system_prompt,
-                    tools=[_SUBMIT_REVIEWED_SCRIPT_TOOL],
-                    tool_choice={"type": "tool", "name": "submit_reviewed_script"},
-                    messages=[{"role": "user", "content": user_prompt}],
+                result = provider.generate_tool_call(
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    tool=_SUBMIT_REVIEWED_SCRIPT_TOOL,
                 )
-                usage["input_tokens"] = response.usage.input_tokens
-                usage["output_tokens"] = response.usage.output_tokens
-        except anthropic.APIError as exc:
+                usage["input_tokens"] = result.input_tokens
+                usage["output_tokens"] = result.output_tokens
+        except LLMProviderError as exc:
             logger.warning("script_reviewer_call_failed", error=str(exc))
-            return self._skipped(draft, f"Claude API call failed: {exc}")
+            return self._skipped(draft, f"LLM call failed: {exc}")
 
-        if response.stop_reason == "refusal":
-            logger.warning("script_reviewer_refusal")
-            return self._skipped(draft, "Claude declined to respond")
-
-        tool_use = next((block for block in response.content if block.type == "tool_use"), None)
-        if tool_use is None:
-            logger.warning("script_reviewer_no_tool_use", stop_reason=response.stop_reason)
-            return self._skipped(
-                draft, f"Claude did not return a review (stop_reason={response.stop_reason})"
-            )
-
-        if not tool_use.input["main_sections"]:
+        if not result.tool_input["main_sections"]:
             logger.warning("script_reviewer_empty_main_sections")
             return self._skipped(draft, "review response had no main sections")
 
         try:
-            return script_from_dict(tool_use.input, review_notes=tool_use.input["review_notes"])
+            return script_from_dict(result.tool_input, review_notes=result.tool_input["review_notes"])
         except (KeyError, TypeError, ValueError) as exc:
             logger.warning("script_reviewer_malformed_response", error=str(exc))
             return self._skipped(draft, f"malformed review response: {exc}")

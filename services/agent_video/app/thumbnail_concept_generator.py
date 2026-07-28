@@ -1,4 +1,4 @@
-"""Claude-backed thumbnail concept generation for the Thumbnail Agent.
+"""LLM-backed thumbnail concept generation for the Thumbnail Agent.
 
 Turns a project's topic/title, full script, and channel branding into
 several ranked, click-worthy thumbnail concepts — each with its own
@@ -7,37 +7,37 @@ concrete visual description, an image-generation prompt optimized for a
 for the audit trail. `ThumbnailAgent` (thumbnail_agent.py) then renders
 the best-ranked concept(s) into real images via `get_provider("image_gen")`.
 
-Both prompts sent to Claude are loaded at runtime from the Prompt
+Both prompts sent to the model are loaded at runtime from the Prompt
 Management System (libs/prompts) — see
 prompts/thumbnail/generate_concepts_system/ and
 prompts/thumbnail/generate_concepts_user/ — following the same forced
 tool-use, no-fallback pattern as
-services/agent_research/app/idea_generator.py: a missing API key, a
-failed call, a refusal, or a malformed response all raise
+services/agent_research/app/idea_generator.py: a missing/misconfigured
+provider, a failed call, a refusal, or a malformed response all raise
 `ThumbnailConceptError` instead of returning a placeholder concept —
 inventing a fake concept would defeat the entire purpose of this agent.
 
-Deliberately a direct `anthropic` SDK call, not routed through
-`libs.providers`/the Provider Registry: no agent in this codebase treats
-Claude/LLM reasoning as a swappable `libs.providers` capability today
-(Research's IdeaGenerator, the Script Agent's ScriptGenerator, and the
-Manager's reasoning engine all call `anthropic.Anthropic` directly) — the
-"reuse the Provider Registry" / "don't hardcode providers" requirements
-this agent satisfies are about the *image generation* provider
-(`get_provider("image_gen")` in thumbnail_agent.py), not the reasoning
-model, matching the identical scoping every other agent's own LLM call
-already uses.
+Routed through `libs.providers.get_provider("llm")` — the same swappable
+Provider Registry capability every other reasoning call site in this
+codebase now uses (services/agent_research/app/idea_generator.py,
+services/agent_scriptwriter/app/script_generator.py,
+services/orchestrator/app/manager/reasoning.py,
+services/agent_qa/app/llm_review.py). This agent already used
+`get_provider("image_gen")` for the *rendering* half of its job
+(thumbnail_agent.py); this is the same treatment applied to the
+*reasoning* half.
 """
 
 from dataclasses import dataclass
 from typing import Any
 
-import anthropic
-
 from libs.core.config import get_settings
 from libs.core.logging import get_logger
 from libs.llm_usage import track_llm_call
 from libs.prompts import PromptNotFoundError, PromptRenderError, get_prompt_loader
+from libs.providers.base import ProviderConfigError
+from libs.providers.llm.base import LLMProviderError, LLMToolCall
+from libs.providers.registry import get_provider
 
 logger = get_logger(__name__)
 
@@ -63,11 +63,10 @@ class GeneratedThumbnailConcept:
     rationale: str
 
 
-_PROPOSE_CONCEPTS_TOOL = {
-    "name": "propose_thumbnail_concepts",
-    "description": "Propose one or more ranked YouTube thumbnail concepts for a finished video.",
-    "strict": True,
-    "input_schema": {
+_PROPOSE_CONCEPTS_TOOL = LLMToolCall(
+    name="propose_thumbnail_concepts",
+    description="Propose one or more ranked YouTube thumbnail concepts for a finished video.",
+    input_schema={
         "type": "object",
         "properties": {
             "concepts": {
@@ -119,21 +118,13 @@ _PROPOSE_CONCEPTS_TOOL = {
         "required": ["concepts"],
         "additionalProperties": False,
     },
-}
+)
 
 
 class ThumbnailConceptGenerator:
     def __init__(self) -> None:
-        settings = get_settings()
-        self._model = settings.anthropic_model
-        self._effort = settings.anthropic_effort
-        self._prompt_version = settings.thumbnail_prompt_version
+        self._prompt_version = get_settings().thumbnail_prompt_version
         self._prompts = get_prompt_loader()
-        self._client = (
-            anthropic.Anthropic(api_key=settings.anthropic_api_key)
-            if settings.anthropic_api_key
-            else None
-        )
 
     def generate(
         self,
@@ -150,8 +141,10 @@ class ThumbnailConceptGenerator:
         script_text: str,
         concept_count: int,
     ) -> list[GeneratedThumbnailConcept]:
-        if self._client is None:
-            raise ThumbnailConceptError("ANTHROPIC_API_KEY is not configured")
+        try:
+            provider = get_provider("llm")
+        except ProviderConfigError as exc:
+            raise ThumbnailConceptError(f"llm provider unavailable: {exc}") from exc
 
         try:
             system_template = self._prompts.get(
@@ -181,38 +174,22 @@ class ThumbnailConceptGenerator:
                 project_id=project_id,
                 agent_name="thumbnail",
                 call_site="thumbnail_concept_generator.generate",
-                model=self._model,
+                provider=type(provider).__name__,
+                model=provider.model,
                 prompt_name="generate_concepts",
                 prompt_version=system_template.version,
             ) as usage:
-                response = self._client.messages.create(
-                    model=self._model,
-                    max_tokens=4096,
-                    output_config={"effort": self._effort},
-                    system=system_prompt,
-                    tools=[_PROPOSE_CONCEPTS_TOOL],
-                    tool_choice={"type": "tool", "name": "propose_thumbnail_concepts"},
-                    messages=[{"role": "user", "content": user_prompt}],
+                result = provider.generate_tool_call(
+                    system_prompt=system_prompt, user_prompt=user_prompt, tool=_PROPOSE_CONCEPTS_TOOL,
                 )
-                usage["input_tokens"] = response.usage.input_tokens
-                usage["output_tokens"] = response.usage.output_tokens
-        except anthropic.APIError as exc:
+                usage["input_tokens"] = result.input_tokens
+                usage["output_tokens"] = result.output_tokens
+        except LLMProviderError as exc:
             logger.error("thumbnail_concept_generator_call_failed", error=str(exc))
-            raise ThumbnailConceptError(f"Claude API call failed: {exc}") from exc
+            raise ThumbnailConceptError(f"LLM call failed: {exc}") from exc
 
-        if response.stop_reason == "refusal":
-            logger.warning("thumbnail_concept_generator_refusal")
-            raise ThumbnailConceptError("Claude declined to respond")
-
-        tool_use = next((block for block in response.content if block.type == "tool_use"), None)
-        if tool_use is None:
-            logger.error("thumbnail_concept_generator_no_tool_use", stop_reason=response.stop_reason)
-            raise ThumbnailConceptError(
-                f"Claude did not return any concepts (stop_reason={response.stop_reason})"
-            )
-
-        concepts_raw: list[dict[str, Any]] = tool_use.input["concepts"]
+        concepts_raw: list[dict[str, Any]] = result.tool_input["concepts"]
         if not concepts_raw:
-            raise ThumbnailConceptError("Claude returned an empty concepts list")
+            raise ThumbnailConceptError("the model returned an empty concepts list")
 
         return [GeneratedThumbnailConcept(**concept) for concept in concepts_raw]

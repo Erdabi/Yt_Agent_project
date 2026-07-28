@@ -5,16 +5,16 @@ A concrete implementation forces a model to call one caller-supplied
 which model actually answered and the token counts, so a caller can
 track usage without knowing anything vendor-specific.
 
-Distinct from every other agent's own direct `anthropic.Anthropic()` SDK
-call (Research's `IdeaGenerator`, the Script Agent's `ScriptGenerator`,
+Every reasoning call site in this codebase routes through
+`libs.providers.get_provider("llm")` — Research's `IdeaGenerator`/
+`KnowledgeBuilder`, the Script Agent's `ScriptGenerator`/`ScriptReviewer`,
 the Manager's reasoning engine, the Thumbnail Agent's
-`ThumbnailConceptGenerator`) — those predate this capability and stay as
-they are (retrofitting them is a separate, unrequested change). The
-Quality Control Agent (services/agent_qa/app/) is the first consumer that
-routes its LLM reasoning through `libs.providers.get_provider("llm")`
-rather than a hardcoded `anthropic` import, so its reviewers' model
-choice is a `config/providers.yaml` edit like every other capability in
-this codebase, not a code change.
+`ThumbnailConceptGenerator`, and the Quality Control Agent's reviewers —
+none of them import a vendor SDK (`anthropic`, an Ollama client, or
+otherwise) directly. Which concrete model answers is a
+`config/providers.yaml` edit (or an `LLM_PROVIDER` env override), never a
+code change — see `ollama_provider.py` (the local default) and
+`anthropic_provider.py` (a swappable cloud alternative).
 """
 
 from abc import abstractmethod
@@ -70,6 +70,15 @@ class LLMToolResult:
     provider_name: str
     input_tokens: int | None
     output_tokens: int | None
+    #: True only when the provider actually exercised a live web search/
+    #: fetch capability while producing this result (not merely whether
+    #: the caller passed `enable_web_research=True` — a provider that has
+    #: the capability may still not need it for a trivial prompt). Always
+    #: False for a provider with no such capability at all. Lets a caller
+    #: like `KnowledgeBuilder` honestly label a result that was answered
+    #: from parametric knowledge rather than verified sources, without
+    #: branching on which concrete provider is configured.
+    used_web_research: bool = False
 
 
 class LLMProvider(Provider):
@@ -89,12 +98,32 @@ class LLMProvider(Provider):
         user_prompt: str,
         tool: LLMToolCall,
         images: list[bytes] | None = None,
+        enable_web_research: bool = False,
     ) -> LLMToolResult:
         """Force the model to call `tool` and return its structured
         input. `images` (PNG bytes), when given, are attached as visual
         context alongside `user_prompt` — e.g. the Quality Control
         Agent's `ThumbnailReviewer` reviewing the actual rendered
-        thumbnail image, not just its generation metadata. Must raise
-        `LLMConfigError`/`LLMRefusalError`/`LLMResponseError` (never a
-        bare/vendor-specific exception) on any failure.
+        thumbnail image, not just its generation metadata. A provider
+        with no vision-capable model may honestly drop `images` (logging
+        a warning) rather than fail outright — the same graceful-
+        degradation contract `TTSProvider`/`word_timings` already
+        establishes for a capability a given local model lacks.
+
+        `enable_web_research`, when True, lets the provider ground its
+        answer in live sources (server-side web search/fetch tools, when
+        it has them) before finally calling `tool` — used only by
+        Research's `KnowledgeBuilder`, whose whole job is producing
+        verified facts with real citations, never invented ones. A
+        provider with no such capability (e.g. a local model with no
+        server-side tools) must still answer — best-effort, from its own
+        knowledge — rather than raise; it is the caller's responsibility
+        to treat an unverified package as such (see `KnowledgeBuilder`'s
+        `supporting_notes` handling), not the provider's to refuse.
+        Every multi-turn mechanics this requires (continuations, tool
+        wiring) stays inside the provider — a caller only ever sees one
+        `LLMToolResult` back, exactly like every other call.
+
+        Must raise `LLMConfigError`/`LLMRefusalError`/`LLMResponseError`
+        (never a bare/vendor-specific exception) on any failure.
         """

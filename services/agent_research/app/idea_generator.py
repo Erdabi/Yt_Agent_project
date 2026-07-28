@@ -1,32 +1,35 @@
-"""Claude-backed idea generation for the Research Agent.
+"""LLM-backed idea generation for the Research Agent.
 
-Both prompts sent to Claude are loaded at runtime from the Prompt
+Both prompts sent to the model are loaded at runtime from the Prompt
 Management System (libs/prompts) rather than embedded as Python string
 constants — see prompts/research/generate_ideas_system/ and
 prompts/research/generate_ideas_user/, and
 services/orchestrator/app/manager/reasoning.py for the same pattern
-applied to the Manager Agent.
+applied to the Manager Agent. The model itself is whichever `llm`
+provider config/providers.yaml has active (Ollama by default,
+Anthropic/others a config change away) — this module never imports a
+vendor SDK directly, only `libs.providers.get_provider("llm")`.
 
 Unlike the Manager's reasoning engine, there is no deterministic fallback
-here. A missing API key, a failed call, a refusal, or a malformed response
-all raise `IdeaGenerationError` instead of returning a placeholder idea —
-inventing a fake "fallback idea" would defeat the entire purpose of an
-agent whose only job is finding real ideas. The error propagates up
-through `ResearchAgent.run()` as a normal job failure, which the Manager's
-own reasoning engine then decides how to handle (retry a transient
-failure, escalate a persistent one) — exactly the same path any other
-agent's failure takes.
+here. A missing/misconfigured provider, a failed call, a refusal, or a
+malformed response all raise `IdeaGenerationError` instead of returning a
+placeholder idea — inventing a fake "fallback idea" would defeat the
+entire purpose of an agent whose only job is finding real ideas. The
+error propagates up through `ResearchAgent.run()` as a normal job
+failure, which the Manager's own reasoning engine then decides how to
+handle (retry a transient failure, escalate a persistent one) — exactly
+the same path any other agent's failure takes.
 """
 
 from dataclasses import dataclass
 from typing import Any
 
-import anthropic
-
-from libs.core.config import get_settings
 from libs.core.logging import get_logger
 from libs.llm_usage import track_llm_call
 from libs.prompts import PromptNotFoundError, PromptRenderError, get_prompt_loader
+from libs.providers.base import ProviderConfigError
+from libs.providers.llm.base import LLMProviderError, LLMToolCall
+from libs.providers.registry import get_provider
 
 logger = get_logger(__name__)
 
@@ -56,11 +59,10 @@ class GeneratedIdea:
     research_notes: str
 
 
-_PROPOSE_IDEAS_TOOL = {
-    "name": "propose_video_ideas",
-    "description": "Propose one or more scored, fully-researched YouTube video ideas for a channel.",
-    "strict": True,
-    "input_schema": {
+_PROPOSE_IDEAS_TOOL = LLMToolCall(
+    name="propose_video_ideas",
+    description="Propose one or more scored, fully-researched YouTube video ideas for a channel.",
+    input_schema={
         "type": "object",
         "properties": {
             "ideas": {
@@ -128,20 +130,12 @@ _PROPOSE_IDEAS_TOOL = {
         "required": ["ideas"],
         "additionalProperties": False,
     },
-}
+)
 
 
 class IdeaGenerator:
     def __init__(self) -> None:
-        settings = get_settings()
-        self._model = settings.anthropic_model
-        self._effort = settings.anthropic_effort
         self._prompts = get_prompt_loader()
-        self._client = (
-            anthropic.Anthropic(api_key=settings.anthropic_api_key)
-            if settings.anthropic_api_key
-            else None
-        )
 
     def generate(
         self,
@@ -155,8 +149,10 @@ class IdeaGenerator:
         goal: str | None,
         count: int,
     ) -> list[GeneratedIdea]:
-        if self._client is None:
-            raise IdeaGenerationError("ANTHROPIC_API_KEY is not configured")
+        try:
+            provider = get_provider("llm")
+        except ProviderConfigError as exc:
+            raise IdeaGenerationError(f"llm provider unavailable: {exc}") from exc
 
         try:
             system_template = self._prompts.get(
@@ -182,38 +178,22 @@ class IdeaGenerator:
                 project_id=project_id,
                 agent_name="research",
                 call_site="idea_generator.generate",
-                model=self._model,
+                provider=type(provider).__name__,
+                model=provider.model,
                 prompt_name="generate_ideas",
                 prompt_version=system_template.version,
             ) as usage:
-                response = self._client.messages.create(
-                    model=self._model,
-                    max_tokens=4096,
-                    output_config={"effort": self._effort},
-                    system=system_prompt,
-                    tools=[_PROPOSE_IDEAS_TOOL],
-                    tool_choice={"type": "tool", "name": "propose_video_ideas"},
-                    messages=[{"role": "user", "content": user_prompt}],
+                result = provider.generate_tool_call(
+                    system_prompt=system_prompt, user_prompt=user_prompt, tool=_PROPOSE_IDEAS_TOOL,
                 )
-                usage["input_tokens"] = response.usage.input_tokens
-                usage["output_tokens"] = response.usage.output_tokens
-        except anthropic.APIError as exc:
+                usage["input_tokens"] = result.input_tokens
+                usage["output_tokens"] = result.output_tokens
+        except LLMProviderError as exc:
             logger.error("idea_generator_call_failed", error=str(exc))
-            raise IdeaGenerationError(f"Claude API call failed: {exc}") from exc
+            raise IdeaGenerationError(f"LLM call failed: {exc}") from exc
 
-        if response.stop_reason == "refusal":
-            logger.warning("idea_generator_refusal")
-            raise IdeaGenerationError("Claude declined to respond")
-
-        tool_use = next((block for block in response.content if block.type == "tool_use"), None)
-        if tool_use is None:
-            logger.error("idea_generator_no_tool_use", stop_reason=response.stop_reason)
-            raise IdeaGenerationError(
-                f"Claude did not return any ideas (stop_reason={response.stop_reason})"
-            )
-
-        ideas_raw: list[dict[str, Any]] = tool_use.input["ideas"]
+        ideas_raw: list[dict[str, Any]] = result.tool_input["ideas"]
         if not ideas_raw:
-            raise IdeaGenerationError("Claude returned an empty ideas list")
+            raise IdeaGenerationError("the model returned an empty ideas list")
 
         return [GeneratedIdea(**idea) for idea in ideas_raw]

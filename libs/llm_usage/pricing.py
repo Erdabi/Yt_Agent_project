@@ -18,6 +18,12 @@ _PRICING_PER_MILLION_TOKENS: dict[str, tuple[float, float]] = {
     "claude-sonnet-5": (3.00, 15.00),
     "claude-sonnet-4-6": (3.00, 15.00),
     "claude-haiku-4-5": (1.00, 5.00),
+    # Local inference (libs/providers/llm/ollama_provider.py) — genuinely
+    # $0, not "unknown"; listed explicitly rather than left to fall
+    # through to the None-for-unknown-model branch below, so a usage-log
+    # row for a local call reads as "$0.00 confirmed" rather than
+    # "cost not estimated."
+    "qwen3:32b": (0.0, 0.0),
 }
 
 

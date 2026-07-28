@@ -22,6 +22,7 @@ class StubLLMProvider(LLMProvider):
         user_prompt: str,
         tool: LLMToolCall,
         images: list[bytes] | None = None,
+        enable_web_research: bool = False,
     ) -> LLMToolResult:
         raise NotImplementedError(
             "No real LLM provider is configured. Add one under libs/providers/llm/, "

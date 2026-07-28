@@ -52,6 +52,34 @@ curl "localhost:8000/jobs?limit=20"
 See [docs/architecture/01-system-architecture.md §1.4](./docs/architecture/01-system-architecture.md)
 for the full API surface and pipeline state machine.
 
+## Running fully locally, with no paid API keys
+
+`config/providers.yaml` defaults every swappable capability to a local,
+self-hosted implementation — the whole pipeline runs without an
+Anthropic/ElevenLabs/Runway account:
+
+- **`llm`** (ideation, scripting, quality control, publish metadata) —
+  [Ollama](https://ollama.com), any pulled model (`ollama pull qwen3:32b`
+  by default; `OLLAMA_URL`/`OLLAMA_MODEL` in `.env`).
+- **`tts`** (narration) — [Kokoro-82M](https://github.com/hexgrad/kokoro)
+  (`pip install kokoro`), running in-process, no server.
+- **`video_gen`/`image_gen`** (b-roll, thumbnails) —
+  [ComfyUI](https://github.com/comfyanonymous/ComfyUI) (`COMFYUI_URL` in
+  `.env`), driven by JSON workflow templates under `config/comfyui/` —
+  see that directory's README for the placeholder convention and how to
+  swap in your own exported workflow.
+
+Publishing still needs real YouTube OAuth credentials to reach a real
+channel (`youtube.active` stays `stub`/dry-run otherwise — see
+[Technology Choices §5.2](./docs/architecture/05-technology-choices.md)),
+and Research's `KnowledgeBuilder` needs Anthropic specifically
+(`LLM_PROVIDER=anthropic` for that one call, or accept its
+`supporting_notes` caveat that a local-model package isn't independently
+verified — see that module's own docstring) for genuinely web-verified
+facts, since no local model here has real-time web search. Every other
+stage runs against the local defaults above with no vendor account at
+all.
+
 ## Running tests
 
 ```bash
