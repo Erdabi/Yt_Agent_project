@@ -30,10 +30,11 @@ class Settings(BaseSettings):
     )
 
     # --- Identity -----------------------------------------------------
-    # SERVICE_NAME is set per-container in docker-compose.yml (e.g.
-    # "orchestrator", "agent_research") and flows into every log line so
-    # log output is attributable to a specific service without relying on
-    # the container hostname.
+    # SERVICE_NAME is set per-process (per-container, if you do run this
+    # under Docker Compose; per-terminal/supervisor entry for a local,
+    # non-Docker setup) — e.g. "orchestrator", "agent_research" — and
+    # flows into every log line so log output is attributable to a
+    # specific service without relying on the hostname.
     service_name: str = Field(default="app", alias="SERVICE_NAME")
     environment: Literal["local", "staging", "production"] = Field(
         default="local", alias="APP_ENV"
@@ -41,7 +42,11 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
     # --- PostgreSQL -----------------------------------------------------
-    postgres_host: str = Field(default="postgres", alias="POSTGRES_HOST")
+    # Defaults assume Postgres runs on the same machine as this process
+    # (a local install, e.g. via WSL/apt/Homebrew) — override via .env for
+    # a container-networked or remote deployment (e.g. POSTGRES_HOST=postgres
+    # under Docker Compose).
+    postgres_host: str = Field(default="localhost", alias="POSTGRES_HOST")
     postgres_port: int = Field(default=5432, alias="POSTGRES_PORT")
     postgres_db: str = Field(alias="POSTGRES_DB")
     postgres_user: str = Field(alias="POSTGRES_USER")
@@ -49,7 +54,8 @@ class Settings(BaseSettings):
     database_pool_size: int = Field(default=5, alias="DATABASE_POOL_SIZE")
 
     # --- Redis (Celery broker/result backend + rate-limit locks) -------
-    redis_host: str = Field(default="redis", alias="REDIS_HOST")
+    # Same locally-running-by-default assumption as Postgres above.
+    redis_host: str = Field(default="localhost", alias="REDIS_HOST")
     redis_port: int = Field(default=6379, alias="REDIS_PORT")
     redis_broker_db: int = Field(default=0, alias="REDIS_BROKER_DB")
     redis_result_backend_db: int = Field(default=1, alias="REDIS_RESULT_BACKEND_DB")
