@@ -75,6 +75,11 @@ class VisualClipRef:
 
     storage_path: str
     kind: str  # "image" | "video"
+    #: How long this specific visual holds the screen, from the visual
+    #: beat it realizes. `None` for a visual with no beat of its own, in
+    #: which case the compositor falls back to dividing the segment
+    #: evenly across however many visuals it has.
+    duration_sec: float | None = None
 
 
 @dataclass(frozen=True)
@@ -163,6 +168,7 @@ class RenderingModule:
             VisualClipRef(
                 storage_path=asset.storage_path,
                 kind="video" if asset.shot_type in _VIDEO_SHOT_TYPES else "image",
+                duration_sec=asset.duration_sec,
             )
             for asset in entry.visual_assets
             if asset.storage_path
@@ -233,6 +239,7 @@ class RenderingModule:
                         clip.storage_path, f"segment {op.segment_id} visual ({clip.kind})"
                     ),
                     kind=clip.kind,
+                    duration_sec=clip.duration_sec,
                 )
                 for clip in op.visual_clips
             ],

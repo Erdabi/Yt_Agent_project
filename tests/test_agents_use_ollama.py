@@ -234,9 +234,14 @@ def test_thumbnail_concept_generator_via_ollama():
 # --- Script Agent: ScriptGenerator / ScriptReviewer -------------------------
 
 
-def _fake_beat(wpm: int = 150) -> dict:
+def _fake_beat(voiceover_text: str | None = None, wpm: int = 150) -> dict:
     return {
-        "voiceover_text": "Engines are more complex than most people realize.",
+        # Each beat needs genuinely different narration: `script_from_dict`
+        # rejects a script whose beats repeat (script_schema.py's
+        # `_validate_beat_distinctness`), so reusing one line for every
+        # beat would fail parsing before these tests ever reached the
+        # Ollama plumbing they exist to exercise.
+        "voiceover_text": voiceover_text or "Engines are more complex than most people realize.",
         "scene_description": "Cutaway engine model, dramatic lighting.",
         "visual_suggestions": "A cutaway engine model in dramatic lighting.",
         "production_metadata": {
@@ -256,10 +261,21 @@ def _fake_script_dict() -> dict:
         "structure_notes": "problem -> explanation -> takeaway",
         "retention_notes": "open loop in the hook",
         "hook": _fake_beat(),
-        "introduction": _fake_beat(),
-        "main_sections": [{"heading": "The four strokes", **_fake_beat()}],
-        "ending": _fake_beat(),
-        "call_to_action": _fake_beat(),
+        "introduction": _fake_beat(
+            "Today we follow a single spark from the coil all the way to the driveshaft."
+        ),
+        "main_sections": [
+            {
+                "heading": "The four strokes",
+                **_fake_beat(
+                    "Intake pulls the mixture down, compression squeezes it into a tight pocket."
+                ),
+            }
+        ],
+        "ending": _fake_beat(
+            "Four simple motions, repeated thousands of times a minute, move a two ton car."
+        ),
+        "call_to_action": _fake_beat("Subscribe and we will take apart a gearbox next week."),
     }
 
 

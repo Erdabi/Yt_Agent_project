@@ -70,6 +70,19 @@ class AssetCacheKey:
     #: today's single implicit language is honestly hashed as a baseline,
     #: ready to matter once real language settings exist.
     language: str = "en"
+    #: An explicit "these must not share bytes" discriminator, for
+    #: requests that are semantically identical but whose *outputs* must
+    #: still differ. Content-addressing is the right default — the same
+    #: request really should reuse the same bytes — but it is wrong for
+    #: two visuals shown at different moments of the same video: they
+    #: would collapse onto one image file and the video would visibly
+    #: repeat. A caller that needs distinct output passes a stable,
+    #: deterministic discriminator here (the Video Agent uses the beat's
+    #: `segment_id:beat_index`), so re-running the same job still hits
+    #: the cache while genuinely different beats never do. Left `None`
+    #: wherever sharing is correct, which keeps every existing key's hash
+    #: unchanged.
+    variation_key: str | None = None
     settings: dict[str, Any] = field(default_factory=dict)
 
     def compute_hash(self) -> str:
@@ -84,6 +97,11 @@ class AssetCacheKey:
             "language": self.language,
             "settings": self.settings,
         }
+        # Only added to the hashed payload when actually set, so keys
+        # that don't need output separation hash exactly as they did
+        # before this field existed — existing cache entries stay valid.
+        if self.variation_key is not None:
+            payload["variation_key"] = self.variation_key
         canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 

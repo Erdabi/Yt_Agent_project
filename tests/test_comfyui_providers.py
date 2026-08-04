@@ -45,6 +45,30 @@ def test_shipped_templates_load_and_declare_output_node(path, expected_title):
     assert isinstance(workflow, dict) and workflow
 
 
+@pytest.mark.parametrize(
+    "path", ["config/comfyui/text_to_image.json", "config/comfyui/text_to_video.json"]
+)
+def test_shipped_templates_have_internally_consistent_wiring(path):
+    """Every node-to-node reference must point at a node that exists.
+
+    A ComfyUI graph wires nodes by id (`["10", 0]` = "output 0 of node
+    10"), so a dangling id is only caught when ComfyUI itself rejects
+    the submitted prompt — i.e. after a real generation call. Editing
+    these templates (adding a hires pass, swapping an upscaler) is
+    exactly when an id goes stale, so it is worth catching here instead.
+    """
+    workflow, _ = load_workflow_template(path)
+    for node_id, node in workflow.items():
+        for field, value in node["inputs"].items():
+            is_reference = (
+                isinstance(value, list) and len(value) == 2 and isinstance(value[0], str)
+            )
+            if is_reference:
+                assert value[0] in workflow, (
+                    f"{path}: node {node_id}.{field} references missing node {value[0]!r}"
+                )
+
+
 def test_render_workflow_preserves_int_type_for_whole_value_placeholders():
     """ComfyUI validates node inputs by type — a width/seed field must
     come back as a real int, not a stringified one embedded in text.
@@ -76,8 +100,30 @@ def test_image_provider_full_flow_and_fills_placeholders():
     def fake_request(method, url, *, json=None, params=None, timeout=None):
         if method == "POST" and url.endswith("/prompt"):
             assert json["prompt"]["6"]["inputs"]["text"] == "a red apple, studio lighting"
-            assert json["prompt"]["5"]["inputs"]["width"] == 1280
-            assert json["prompt"]["5"]["inputs"]["height"] == 720
+            # The base pass renders at the model's own comfortable
+            # resolution; the hires pass below is what reaches output
+            # size (see ComfyUIImageProvider's width/upscale_factor).
+            assert json["prompt"]["5"]["inputs"]["width"] == 768
+            assert json["prompt"]["5"]["inputs"]["height"] == 432
+            # Every placeholder the shipped template declares must be
+            # substituted — an unfilled one reaches ComfyUI as the
+            # literal string "{{...}}" and is rejected as an invalid
+            # node input, so this is the check that keeps the template
+            # and the provider from silently drifting apart.
+            base_sampler = json["prompt"]["3"]["inputs"]
+            hires_sampler = json["prompt"]["11"]["inputs"]
+            upscale = json["prompt"]["10"]["inputs"]
+            assert upscale["width"] == 1536 and upscale["height"] == 864
+            assert base_sampler["sampler_name"] == "dpmpp_2m"
+            assert base_sampler["scheduler"] == "karras"
+            assert isinstance(base_sampler["cfg"], float)
+            assert isinstance(base_sampler["steps"], int)
+            assert 0.0 < hires_sampler["denoise"] < 1.0
+            for node in json["prompt"].values():
+                for value in node["inputs"].values():
+                    assert not (isinstance(value, str) and "{{" in value), (
+                        f"unsubstituted placeholder reached ComfyUI: {value!r}"
+                    )
             return _FakeResponse(200, {"prompt_id": "img1", "node_errors": {}})
         if "/history/img1" in url:
             history_calls["n"] += 1

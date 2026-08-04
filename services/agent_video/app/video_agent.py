@@ -1,12 +1,13 @@
 """`VideoAgent` — the single agent the Manager dispatches for the whole
 `video_creation` stage.
 
-Internally, video production is a pipeline of six modules, run in
+Internally, video production is a pipeline of seven modules, run in
 sequence inside one `run()` call, so one `Job` row and one Manager
 decision still covers all of it:
 
-    Asset Planning -> Asset Generation -> Voice Generation
-        -> Subtitle Generation -> Timeline Building -> Rendering
+    Voice Generation -> Visual Beat Planning -> Asset Planning
+        -> Asset Generation -> Subtitle Generation
+        -> Timeline Building -> Rendering
 
 Plus the Thumbnail Agent (thumbnail_agent.py), which runs alongside but
 has no place in that dependency chain — it only needs the finished
@@ -31,17 +32,21 @@ already resolved. The Thumbnail Agent also calls `image_gen` on its own
 the same capability, since a thumbnail's image has nothing to do with any
 one storyboard shot.
 
-The real dependency chain is: Asset Generation needs Asset Planning's
-plan; Subtitle Generation needs Voice Generation's durations/timing;
-Timeline Building needs all three of Asset Generation, Voice Generation,
-and Subtitle Generation; Rendering needs Timeline Building. Asset
-Planning/Asset Generation have no real dependency on Voice
-Generation/Subtitle Generation (or vice versa) — they could run in
-parallel — but this method still sequences everything in one straight
-line, the same trade-off the four-module design this replaces already
-made explicitly for Thumbnail Generation: one job, one linear sequence,
-rather than introducing concurrency inside a single Celery task for a
-modest latency win.
+The real dependency chain is: Visual Beat Planning needs Voice
+Generation's *measured* narration durations (it sizes each segment's
+visuals from how long that segment actually takes to say — see that
+module's docstring); Asset Planning needs those beats; Asset Generation
+needs Asset Planning's plan; Subtitle Generation needs Voice
+Generation's durations/timing; Timeline Building needs Asset Generation,
+Voice Generation, and Subtitle Generation; Rendering needs Timeline
+Building.
+
+Voice Generation therefore runs *first*, ahead of anything visual. That
+ordering is load-bearing rather than incidental: it is what lets the
+number and length of a segment's visuals be derived from real synthesized
+audio instead of from the Script Agent's pre-production
+`estimated_speech_wpm` guess, which is made before any audio exists and
+routinely diverges from the TTS provider's actual speaking pace.
 
 The trade-off that consolidation makes explicit: a failure partway
 through (e.g. Rendering breaks) means the *whole* video job is retried by
@@ -71,6 +76,7 @@ from .modules.asset_planning import AssetPlanningModule
 from .modules.rendering import RenderingModule
 from .modules.subtitle_generation import SubtitleGenerationModule
 from .modules.timeline_building import TimelineBuildingModule
+from .modules.visual_beat_planning import VisualBeatPlanningModule
 from .modules.voice_generation import VoiceGenerationModule
 from .pipeline_schema import ChannelBranding, SegmentInput
 from .thumbnail_agent import ThumbnailAgent
@@ -82,6 +88,7 @@ class VideoAgent(BaseAgent):
     name = "video"
 
     def __init__(self) -> None:
+        self._visual_beat_planning = VisualBeatPlanningModule()
         self._asset_planning = AssetPlanningModule()
         self._asset_generation = AssetGenerationModule()
         self._voice_generation = VoiceGenerationModule()
@@ -99,9 +106,10 @@ class VideoAgent(BaseAgent):
 
         segments, branding = self._load_input(context.project_id)
 
-        planned_assets = self._asset_planning.plan(segments)
-        resolved_assets = self._asset_generation.generate(context.project_id, planned_assets)
         voice_segments = self._voice_generation.synthesize(context.project_id, segments)
+        visual_beats = self._visual_beat_planning.plan(segments, voice_segments)
+        planned_assets = self._asset_planning.plan(segments, visual_beats)
+        resolved_assets = self._asset_generation.generate(context.project_id, planned_assets)
         subtitle_cues = self._subtitle_generation.generate(segments, voice_segments)
         timeline = self._timeline_building.build(
             context.project_id, segments, resolved_assets, voice_segments, subtitle_cues
@@ -114,6 +122,7 @@ class VideoAgent(BaseAgent):
 
         return {
             "segment_count": len(segments),
+            "visual_beat_count": len(visual_beats),
             "planned_asset_count": len(planned_assets),
             "resolved_asset_count": len(resolved_assets),
             "subtitle_cue_count": len(subtitle_cues),

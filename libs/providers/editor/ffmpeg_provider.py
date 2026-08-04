@@ -180,17 +180,39 @@ class FFmpegEditorProvider(EditorProvider):
         prefix = f"seg{index}"
 
         if segment.visual_clips:
-            clip_count = len(segment.visual_clips)
-            per_clip_duration = duration / clip_count
+            clip_durations = self._clip_durations(segment, duration)
+            # A dissolve consumes overlap — joining N clips with xfade
+            # yields a track (N-1) x fade shorter than their sum. Render
+            # each clip (except the last) that much longer up front so
+            # the joined track lands back on exactly `duration`, and
+            # every visual still starts when its beat says it should.
+            # Compensating here rather than stretching the result keeps
+            # visuals aligned to the narration they were planned against.
+            fade = self._visual_fade(profile, clip_durations)
+            padded_durations = [
+                d + fade if index < len(clip_durations) - 1 else d
+                for index, d in enumerate(clip_durations)
+            ]
             clip_paths = [
                 self._normalize_visual(
-                    work_dir, f"{prefix}_v{i}", clip.data, clip.kind, per_clip_duration, width, height, profile
+                    work_dir,
+                    f"{prefix}_v{i}",
+                    clip.data,
+                    clip.kind,
+                    padded_durations[i],
+                    width,
+                    height,
+                    profile,
+                    # Alternating direction per clip so consecutive
+                    # visuals don't all drift the same way, which reads
+                    # as a mechanical effect rather than as camera move.
+                    zoom_in=(i % 2 == 0),
                 )
                 for i, clip in enumerate(segment.visual_clips)
             ]
         else:
             clip_paths = [self._black_clip(work_dir, f"{prefix}_v0", duration, width, height, profile)]
-        visual_raw = self._concat(work_dir, f"{prefix}_visual", clip_paths)
+        visual_raw = self._concat_visuals(work_dir, f"{prefix}_visual", clip_paths, profile)
 
         audio_paths = [
             self._normalize_audio(work_dir, f"{prefix}_a{i}", data, duration, f"segment {segment.segment_id} audio {i}")
@@ -200,8 +222,24 @@ class FFmpegEditorProvider(EditorProvider):
 
         fade_dur = min(profile.crossfade_sec, duration / 2)
         vf_parts = [
-            self._drawtext_filter(work_dir, f"{prefix}_overlay{i}", text, profile.subtitle_font_size, y_offset=i * 70)
-            for i, text in enumerate(segment.overlay_texts)
+            # Safety net, first in the chain: hold the final frame if the
+            # visual track comes up short. Narration is the authority on
+            # how long a segment lasts, so a visual track even marginally
+            # shorter than the audio (rounding on any per-clip duration,
+            # a crossfade cap that bit deeper than expected) would
+            # otherwise end the segment early and truncate real
+            # narration. `stop_duration` rather than an unbounded
+            # `stop=-1`: an infinite filter output never lets ffmpeg
+            # decide it is done, and the whole command hangs until its
+            # timeout instead of producing a segment. Bounded here, and
+            # bounded again by the explicit `-t` below.
+            f"tpad=stop_mode=clone:stop_duration={duration:.3f}",
+            *(
+                self._drawtext_filter(
+                    work_dir, f"{prefix}_overlay{i}", text, profile.subtitle_font_size, y_offset=i * 70
+                )
+                for i, text in enumerate(segment.overlay_texts)
+            ),
         ]
         if fade_in:
             vf_parts.append(f"fade=t=in:st=0:d={fade_dur:.3f}")
@@ -223,11 +261,53 @@ class FFmpegEditorProvider(EditorProvider):
                 self._ffmpeg, "-y", "-i", visual_raw, "-i", audio_mixed,
                 "-filter_complex", filter_complex, "-map", "[v]", "-map", "[a]",
                 "-r", str(profile.fps), "-pix_fmt", "yuv420p",
-                "-c:a", "aac", "-b:a", self._audio_bitrate, "-shortest", out,
+                "-c:a", "aac", "-b:a", self._audio_bitrate,
+                # `-t` rather than `-shortest`: the segment's length is a
+                # known quantity (its narration), not something to infer
+                # from whichever track happens to end first. Stating it
+                # explicitly is also what makes the padded video stream
+                # above terminate.
+                "-t", f"{duration:.3f}", out,
             ],
             stage=f"composite segment {segment.segment_id}",
         )
         return out
+
+    @staticmethod
+    def _visual_fade(profile: RenderProfile, clip_durations: list[float]) -> float:
+        """The dissolve length actually usable between this segment's
+        visuals: the profile's setting, capped so it can never exceed
+        half the shortest clip it has to blend (beyond that ffmpeg's
+        `xfade` produces a black gap rather than a blend). `0` for a
+        single visual, which has nothing to dissolve into.
+        """
+        if len(clip_durations) < 2 or profile.visual_crossfade_sec <= 0:
+            return 0.0
+        return max(min(profile.visual_crossfade_sec, min(clip_durations) / 2), 0.0)
+
+    @staticmethod
+    def _clip_durations(segment: EditSegment, duration: float) -> list[float]:
+        """How long each of a segment's visuals holds the screen.
+
+        Prefers the per-clip durations the caller computed from its own
+        visual beats (`VisualClip.duration_sec`), rescaled so they add up
+        to exactly the segment's narration-driven duration — a beat plan
+        is built from the same narration, so the two agree to within
+        rounding, but rescaling makes "visuals exactly fill the segment"
+        a property of this code rather than an assumption about the
+        caller's arithmetic.
+
+        Falls back to an even split when the caller supplied no per-clip
+        timing at all, which is the pre-beat behavior.
+        """
+        clips = segment.visual_clips
+        supplied = [clip.duration_sec for clip in clips]
+        if any(value is None or value <= 0 for value in supplied):
+            return [duration / len(clips)] * len(clips)
+        total = sum(supplied)
+        if total <= 0:
+            return [duration / len(clips)] * len(clips)
+        return [value * duration / total for value in supplied]
 
     def _normalize_branding(
         self, work_dir: str, name: str, data: bytes, width: int, height: int, profile: RenderProfile
@@ -257,6 +337,8 @@ class FFmpegEditorProvider(EditorProvider):
         width: int,
         height: int,
         profile: RenderProfile,
+        *,
+        zoom_in: bool = True,
     ) -> str:
         if not data:
             raise EditorInputError(f"{name}: no data provided for a {kind} visual clip")
@@ -270,16 +352,72 @@ class FFmpegEditorProvider(EditorProvider):
         # configured ffmpeg timeout elapses.
         self._validate_decodable(src, f"{name} ({kind} visual clip)")
         out = os.path.join(work_dir, f"{name}.mp4")
-        vf = self._scale_pad_filter(width, height, profile.fps)
-        loop_args = ["-loop", "1"] if kind == "image" else ["-stream_loop", "-1"]
+
+        if kind == "image":
+            input_args = ["-loop", "1"]
+            vf = self._still_image_filter(width, height, duration, profile, zoom_in=zoom_in)
+        else:
+            # Deliberately *not* `-stream_loop -1`: looping a short clip
+            # to fill a longer slot replays the same motion over and
+            # over, which is exactly the visible repetition this
+            # pipeline exists to avoid. `tpad=stop_mode=clone` instead
+            # holds the final frame for however long is left, so a clip
+            # shorter than its slot ends on a still rather than
+            # restarting. A clip longer than its slot is still trimmed
+            # by `-t`.
+            input_args = []
+            vf = (
+                f"{self._scale_pad_filter(width, height, profile.fps)},"
+                f"tpad=stop_mode=clone:stop_duration={duration:.3f}"
+            )
+
         self._run(
             [
-                self._ffmpeg, "-y", *loop_args, "-i", src, "-t", f"{duration:.3f}",
+                self._ffmpeg, "-y", *input_args, "-i", src, "-t", f"{duration:.3f}",
                 "-vf", vf, "-pix_fmt", "yuv420p", "-an", out,
             ],
             stage=f"normalize visual ({name})",
         )
         return out
+
+    @staticmethod
+    def _still_image_filter(
+        width: int, height: int, duration: float, profile: RenderProfile, *, zoom_in: bool
+    ) -> str:
+        """Scale/pad a still to the output frame, then apply a slow Ken
+        Burns push so it is never completely motionless.
+
+        The image is first scaled up by the total zoom the move will
+        consume, so `zoompan` crops *into* real pixels rather than
+        magnifying the output frame — without that pre-scale the effect
+        visibly softens the image as it pushes in.
+        """
+        fps = profile.fps
+        if profile.ken_burns_zoom_per_sec <= 0 or duration <= 0:
+            return f"{FFmpegEditorProvider._scale_pad_filter(width, height, fps)}"
+
+        total_frames = max(int(round(duration * fps)), 1)
+        # Total additional scale across the whole clip, clamped so a long
+        # beat can't push so far that the framing changes drastically.
+        zoom_span = min(profile.ken_burns_zoom_per_sec * duration, 0.25)
+        max_zoom = 1.0 + zoom_span
+        # `on` is zoompan's current output frame index.
+        progress = f"(on/{max(total_frames - 1, 1)})"
+        zoom_expr = (
+            f"{1.0:.4f}+{zoom_span:.4f}*{progress}"
+            if zoom_in
+            else f"{max_zoom:.4f}-{zoom_span:.4f}*{progress}"
+        )
+        supersample_w = int(width * (max_zoom + 0.05))
+        supersample_h = int(height * (max_zoom + 0.05))
+        return (
+            f"scale={supersample_w}:{supersample_h}:force_original_aspect_ratio=increase,"
+            f"crop={supersample_w}:{supersample_h},"
+            f"zoompan=z='{zoom_expr}':"
+            f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
+            f"d={total_frames}:s={width}x{height}:fps={fps},"
+            f"setsar=1"
+        )
 
     def _black_clip(self, work_dir: str, name: str, duration: float, width: int, height: int, profile: RenderProfile) -> str:
         out = os.path.join(work_dir, f"{name}.mp4")
@@ -320,6 +458,57 @@ class FFmpegEditorProvider(EditorProvider):
             "-ar", "44100", "-ac", "2", out,
         ]
         self._run(cmd, stage=f"mix audio ({name})")
+        return out
+
+    def _concat_visuals(
+        self, work_dir: str, name: str, paths: list[str], profile: RenderProfile
+    ) -> str:
+        """Join one segment's visuals into a single clip, dissolving
+        between them rather than hard-cutting.
+
+        A dissolve consumes overlap: `xfade` starts the next clip
+        `visual_crossfade_sec` before the previous one ends, so N clips
+        joined this way are shorter than their sum by (N-1) x the
+        dissolve. `_build_segment` has already rendered each clip that
+        much longer to compensate, so the joined track lands back on the
+        segment's real duration.
+        """
+        if len(paths) == 1:
+            return paths[0]
+
+        durations = [self._probe_duration(path) for path in paths]
+        fade = self._visual_fade(profile, durations)
+        if fade <= 0:
+            return self._concat(work_dir, name, paths)
+
+        cmd = [self._ffmpeg, "-y"]
+        for path in paths:
+            cmd += ["-i", path]
+
+        # Chain xfades left to right, tracking where each successive
+        # transition starts on the *accumulated* timeline.
+        filters = []
+        current = "[0:v]"
+        elapsed = durations[0]
+        for index in range(1, len(paths)):
+            offset = max(elapsed - fade, 0.0)
+            label = f"[x{index}]"
+            filters.append(
+                f"{current}[{index}:v]xfade=transition=fade:duration={fade:.3f}:"
+                f"offset={offset:.3f}{label}"
+            )
+            current = label
+            elapsed = offset + fade + (durations[index] - fade)
+
+        total = sum(durations) - fade * (len(paths) - 1)
+        out = os.path.join(work_dir, f"{name}.mp4")
+        cmd += [
+            "-filter_complex", ";".join(filters),
+            "-map", current,
+            "-t", f"{total:.3f}",
+            "-r", str(profile.fps), "-pix_fmt", "yuv420p", "-an", out,
+        ]
+        self._run(cmd, stage=f"crossfade visuals ({name})")
         return out
 
     def _concat(self, work_dir: str, name: str, paths: list[str]) -> str:

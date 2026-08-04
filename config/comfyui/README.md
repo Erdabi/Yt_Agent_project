@@ -31,9 +31,15 @@ Anywhere the provider should fill in a value at generation time, write a
 | Token | Type | Meaning |
 |---|---|---|
 | `{{PROMPT}}` | string | The generation prompt text |
-| `{{WIDTH}}` / `{{HEIGHT}}` | integer | Output frame dimensions |
+| `{{NEGATIVE_PROMPT}}` | string | What to steer away from |
+| `{{WIDTH}}` / `{{HEIGHT}}` | integer | **Base** generation dimensions — what the model diffuses at, not the final output size |
+| `{{UPSCALE_WIDTH}}` / `{{UPSCALE_HEIGHT}}` | integer | Final output dimensions, after the hires pass |
 | `{{SEED}}` | integer | Sampler seed |
-| `{{STEPS}}` | integer | Sampler step count |
+| `{{STEPS}}` | integer | Base-pass sampler step count |
+| `{{HIRES_STEPS}}` | integer | Hires-pass step count (fewer — it starts from a formed image, not noise) |
+| `{{HIRES_DENOISE}}` | float | How much freedom the hires pass has to change the base image (0-1) |
+| `{{SAMPLER}}` / `{{SCHEDULER}}` | string | Sampler and schedule names, e.g. `dpmpp_2m` / `karras` |
+| `{{CFG}}` | float | Prompt-adherence strength |
 | `{{FRAME_COUNT}}` | integer | Video only — how many frames to generate |
 | `{{FILENAME_PREFIX}}` | string | A unique prefix so concurrent jobs never collide on disk |
 
@@ -47,12 +53,33 @@ mechanics.
 
 ## The templates shipped here
 
-- **`text_to_image.json`** — the standard, stable ComfyUI default
-  txt2img graph (`CheckpointLoaderSimple` -> `CLIPTextEncode` ->
-  `EmptyLatentImage` -> `KSampler` -> `VAEDecode` -> `SaveImage`), using
-  core nodes only — no custom node installs required. Point
-  `ckpt_name` (node `"4"`) at whatever checkpoint is actually loaded in
-  your ComfyUI Desktop instance.
+- **`text_to_image.json`** — a txt2img graph with a **hires second
+  pass**, using core nodes only — no custom node installs required.
+  Point `ckpt_name` (node `"4"`) at whatever checkpoint is actually
+  loaded in your ComfyUI Desktop instance.
+
+  The graph is: `CheckpointLoaderSimple` -> `CLIPTextEncode` (positive
+  and negative) -> `EmptyLatentImage` -> `KSampler` (base) ->
+  `VAEDecode` -> `ImageScale` -> `VAEEncode` -> `KSampler` (hires, at
+  reduced denoise) -> `VAEDecode` -> `SaveImage`.
+
+  Two things about that shape are deliberate and worth preserving if
+  you swap in your own graph:
+
+  1. **The base pass renders small and the hires pass enlarges it.**
+     Diffusing directly at output resolution is what produces duplicated
+     faces and repeated horizons — every checkpoint has a resolution it
+     was trained at, and coherence falls apart well before 1080p on
+     SD1.5-class models. Generating near that trained size and then
+     re-diffusing the enlarged result adds real detail instead.
+  2. **The upscale happens in pixel space** (`VAEDecode` ->
+     `ImageScale` -> `VAEEncode`), not with `LatentUpscale`. Measured
+     here: upscaling the latent with `nearest-exact` and re-diffusing at
+     a moderate denoise left a pronounced grid/checkerboard pattern
+     across the whole frame, because the interpolated latent carries
+     block structure the second pass doesn't fully overwrite. The extra
+     VAE round-trip costs time but removes that artifact class
+     entirely.
 
 - **`text_to_video.json`** — **a starting-point example, not a verified
   graph.** It targets the AnimateDiff-Evolved + VideoHelperSuite combo

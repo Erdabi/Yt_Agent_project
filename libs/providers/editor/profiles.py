@@ -45,8 +45,18 @@ class RenderProfile:
     #: around -14 LUFS; a Shorts-style profile might target the same or
     #: a platform-specific value.
     loudness_target_lufs: float
+    #: Fade duration applied between whole *segments*.
     crossfade_sec: float
     subtitle_font_size: int
+    #: Fractional scale added per second by the slow Ken Burns push on
+    #: still images (0.015 = 1.5% per second). `0` disables the effect,
+    #: which is what a profile for a source that already moves (all-video
+    #: b-roll) would set.
+    ken_burns_zoom_per_sec: float = 0.015
+    #: Dissolve duration between consecutive visuals *within* one
+    #: segment — distinct from `crossfade_sec` above, which is between
+    #: segments. `0` makes them hard cuts.
+    visual_crossfade_sec: float = 0.4
 
 
 @lru_cache
@@ -77,6 +87,8 @@ def get_render_profile(name: str) -> RenderProfile:
             loudness_target_lufs=float(entry.get("loudness_target_lufs", -14.0)),
             crossfade_sec=float(entry.get("crossfade_sec", 0.5)),
             subtitle_font_size=int(entry.get("subtitle_font_size", 44)),
+            ken_burns_zoom_per_sec=float(entry.get("ken_burns_zoom_per_sec", 0.015)),
+            visual_crossfade_sec=float(entry.get("visual_crossfade_sec", 0.4)),
         )
     except KeyError as exc:
         raise RenderProfileError(f"render profile {name!r} is missing required field: {exc}") from exc

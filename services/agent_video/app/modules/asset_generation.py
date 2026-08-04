@@ -20,6 +20,7 @@ Timeline Building/Rendering (which only ever see the `ResolvedAsset`
 this module returns, never the provider that produced it).
 """
 
+import hashlib
 from typing import Any
 from uuid import UUID
 
@@ -33,6 +34,7 @@ from libs.schemas.script_production import AssetType as ScriptAssetType
 
 from ..asset_cache import AssetCache, AssetCacheKey
 from ..pipeline_schema import AssetResolutionKind, PlannedAsset, ResolvedAsset
+from ..visual_prompt import DEFAULT_NEGATIVE_PROMPT
 
 logger = get_logger(__name__)
 
@@ -53,6 +55,39 @@ _PHYSICAL_TYPE_AND_EXTENSION: dict[ScriptAssetType, tuple[PhysicalAssetType, str
     ScriptAssetType.SOUND_EFFECT: (PhysicalAssetType.AUDIO, "mp3"),
     ScriptAssetType.BACKGROUND_MUSIC_CUE: (PhysicalAssetType.MUSIC, "mp3"),
 }
+
+
+def _seed_for(variation_key: str) -> int:
+    """A stable sampler seed derived from a beat's identity.
+
+    Two beats that compose the same prompt would otherwise be generated
+    with the same (provider-chosen random) seed only by chance — and a
+    provider that defaults to a *fixed* seed would return visually
+    identical frames for them. Deriving the seed from the beat's own
+    `variation_key` makes distinct beats reliably distinct while keeping
+    one beat reproducible across re-runs, which is the same property the
+    cache key needs.
+    """
+    digest = hashlib.sha256(variation_key.encode("utf-8")).digest()
+    # 32-bit: the range every sampler this codebase talks to accepts.
+    return int.from_bytes(digest[:4], "big")
+
+
+def _generation_kwargs(planned: PlannedAsset) -> dict[str, Any]:
+    """Extra generation parameters passed to `image_gen`/`video_gen`.
+
+    Both interfaces take `**kwargs` (libs/providers/{image_gen,video_gen}/base.py)
+    and a provider is free to ignore anything it doesn't support, so this
+    stays additive: a provider with no seed concept behaves exactly as
+    before.
+    """
+    kwargs: dict[str, Any] = {"negative_prompt": DEFAULT_NEGATIVE_PROMPT}
+    if planned.variation_key is not None:
+        kwargs["seed"] = _seed_for(planned.variation_key)
+    if planned.duration_sec is not None:
+        # Only meaningful to video_gen; image providers ignore it.
+        kwargs["duration_sec"] = planned.duration_sec
+    return kwargs
 
 
 class AssetGenerationModule:
@@ -91,6 +126,9 @@ class AssetGenerationModule:
                 storage_path=None,
                 provider_name=None,
                 description=planned.description,
+                beat_index=planned.beat_index,
+                start_sec=planned.start_sec,
+                duration_sec=planned.duration_sec,
             )
 
         provider = self._get_cached_provider(planned.provider_capability)
@@ -102,6 +140,11 @@ class AssetGenerationModule:
             provider_name=provider_name,
             asset_type=planned.asset_type.value,
             prompt=planned.description,
+            # Set for per-beat visuals, `None` for segment-wide assets —
+            # see `AssetCacheKey.variation_key`. This is what stops two
+            # beats that happen to compose the same prompt from sharing
+            # one image file and making the video visibly repeat.
+            variation_key=planned.variation_key,
         )
         cached = self._cache.get(cache_key)
         if cached is not None:
@@ -152,6 +195,9 @@ class AssetGenerationModule:
             storage_path=storage_path,
             provider_name=provider_name,
             description=planned.description,
+            beat_index=planned.beat_index,
+            start_sec=planned.start_sec,
+            duration_sec=planned.duration_sec,
         )
 
     def _persist_storyboard_shot(self, planned: PlannedAsset, *, asset_id: str | None) -> None:
@@ -162,7 +208,16 @@ class AssetGenerationModule:
                     shot_type=planned.shot_type,
                     prompt_or_query=planned.description,
                     asset_id=UUID(asset_id) if asset_id else None,
-                    order_index=planned.requirement_index,
+                    # A segment's visuals are now ordered by beat, not by
+                    # which requirement they came from — several beats
+                    # routinely share one requirement, so
+                    # `requirement_index` is no longer unique within a
+                    # segment and would collide here.
+                    order_index=(
+                        planned.beat_index
+                        if planned.beat_index is not None
+                        else planned.requirement_index
+                    ),
                 )
             )
 
@@ -174,7 +229,9 @@ class AssetGenerationModule:
     @staticmethod
     def _call_provider(provider: Any, planned: PlannedAsset) -> bytes:
         if planned.provider_capability in ("image_gen", "video_gen"):
-            return provider.generate(planned.description)
+            return provider.generate(
+                planned.description, **_generation_kwargs(planned)
+            )
         # stock_media / audio_library: sourced from a library, not
         # generated from nothing.
         return provider.search(planned.description)

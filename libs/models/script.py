@@ -1,4 +1,4 @@
-from sqlalchemy import Enum, ForeignKey, Integer, String, Text
+from sqlalchemy import Enum, ForeignKey, Integer, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -22,7 +22,14 @@ class Script(Base, UUIDPrimaryKeyMixin, CreatedAtMixin):
     )
     version: Mapped[int] = mapped_column(Integer, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
-    tone: Mapped[str | None] = mapped_column(String(100))
+    # The channel persona/tone this script was written against
+    # (project_context.channel.persona — services/agent_scriptwriter/app/
+    # worker.py). Unbounded like every other free-text field on this
+    # table: Channel.persona_config is documented (libs/models/channel.py)
+    # as a deliberately unstructured, potentially long style guide, not a
+    # short tag, so a fixed-length column here would (and did) crash the
+    # Script Agent on any channel whose persona exceeds it.
+    tone: Mapped[str | None] = mapped_column(Text)
     target_duration_sec: Mapped[int | None] = mapped_column(Integer)
     word_count: Mapped[int | None] = mapped_column(Integer)
     # The narrative structure/story arc the Script Agent deliberately

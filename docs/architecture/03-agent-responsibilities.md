@@ -265,13 +265,14 @@ research; the Research Agent (§3.2) already did that.
 ## 3.4 Video Agent
 
 One agent, one queue (`video`), one `ProjectStage` (`VIDEO_CREATION`) —
-but internally, video production is a pipeline of six modules, run in
+but internally, video production is a pipeline of seven modules, run in
 sequence within a single job (services/agent_video/app/video_agent.py),
 plus the Thumbnail Agent — a genuine, independent agent in its own right
 (see below), invoked in-process alongside it:
 
-    Asset Planning -> Asset Generation -> Voice Generation
-        -> Subtitle Generation -> Timeline Building -> Rendering
+    Voice Generation -> Visual Beat Planning -> Asset Planning
+        -> Asset Generation -> Subtitle Generation
+        -> Timeline Building -> Rendering
 
 The Manager dispatches and retries this stage as one unit; it never sees
 or retries an individual module (or the in-process Thumbnail Agent call).
@@ -289,13 +290,27 @@ own call site, because Timeline Building never sees a provider at all,
 only the `VoiceSegment`/`ResolvedAsset` values Voice Generation/Asset
 Generation already resolved.
 
-The real dependency chain: Asset Generation needs Asset Planning's plan;
-Subtitle Generation needs Voice Generation's durations/timing; Timeline
-Building needs all three of Asset Generation, Voice Generation, and
-Subtitle Generation; Rendering needs Timeline Building. Asset
-Planning/Asset Generation have no real dependency on Voice
-Generation/Subtitle Generation (or vice versa) — they could run in
-parallel — but `VideoAgent.run()` still sequences everything in one
+The real dependency chain: Visual Beat Planning needs Voice Generation's
+*measured* narration durations; Asset Planning needs those beats; Asset
+Generation needs Asset Planning's plan; Subtitle Generation needs Voice
+Generation's durations/timing; Timeline Building needs Asset Generation,
+Voice Generation, and Subtitle Generation; Rendering needs Timeline
+Building.
+
+Voice Generation running first is load-bearing, not incidental. Visual
+Beat Planning subdivides each segment's narration into the visual
+moments it needs (roughly one every 3-6 seconds, with the segment's
+declared `pacing` choosing where in that band), and it sizes them from
+real synthesized audio rather than from the Script Agent's
+pre-production `estimated_speech_wpm` guess — an estimate made before
+any audio exists, which routinely diverges from the TTS provider's
+actual speaking pace. Without that subdivision a single still image
+covers an entire 15-20 second narrative beat, which is what makes a
+generated video read as a slideshow rather than a video; with it, each
+visual covers only the words spoken while it is on screen, and gets its
+own prompt composed from them (services/agent_video/app/visual_prompt.py).
+
+`VideoAgent.run()` sequences everything in one
 straight line, the same trade-off the previous four-module design already
 made explicitly for thumbnail generation: one job, one linear sequence,
 rather than concurrency inside a single Celery task for a modest latency

@@ -14,12 +14,25 @@
 # threaded through the compositor) is exercised and tested now so a
 # future Shorts/aspect-ratio variant is a new entry here, not new code.
 
+# `ken_burns_zoom_per_sec` is the slow continuous push/pull applied to
+# every still image (0 disables it entirely). A still held motionless is
+# what makes an otherwise-fine sequence of images read as a slideshow
+# rather than a video, so a small amount of constant motion is on by
+# default — small being the point: 1.5%/sec is felt rather than noticed,
+# where anything much larger reads as a gimmick and fights the subtitles.
+#
+# `visual_crossfade_sec` is the dissolve between consecutive visuals
+# *inside* one segment, distinct from `crossfade_sec`, which is the fade
+# between whole segments.
+
 long_form_1080p:
   resolution: "1920x1080"
   fps: 30
   loudness_target_lufs: -14
   crossfade_sec: 0.5
   subtitle_font_size: 44
+  ken_burns_zoom_per_sec: 0.015
+  visual_crossfade_sec: 0.4
 
 shorts_1080x1920:
   resolution: "1080x1920"
@@ -27,3 +40,7 @@ shorts_1080x1920:
   loudness_target_lufs: -14
   crossfade_sec: 0.3
   subtitle_font_size: 56
+  # Shorts are watched faster and cut faster: slightly stronger motion,
+  # slightly quicker dissolves.
+  ken_burns_zoom_per_sec: 0.02
+  visual_crossfade_sec: 0.25

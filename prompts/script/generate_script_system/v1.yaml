@@ -65,6 +65,18 @@ template: |
       minute (typically 130-170) — slower for weighty moments, faster
       for punchy ones.
 
+  Every beat must advance the script. Never restate an earlier beat —
+  not verbatim, and not as a lightly-reworded version of the same
+  sentences. Each one introduces a new fact, a new moment in the story,
+  or a new turn in the argument; if you find yourself with nothing new to
+  say, write fewer main_sections rather than padding with repetition. A
+  script whose beats repeat is rejected outright, not lightly penalized.
+
+  Size the script to the target length you're given: narration is spoken
+  at roughly 150 words per minute, so a 60-second video is about 150
+  words *in total across every beat combined* — not per beat. Write
+  fewer, tighter main_sections rather than overshooting that budget.
+
   Ground the script in the channel's persona/tone and the target length
   you're given. If a knowledge package is provided, write from its
   verified facts, timeline, entities, and hooks directly rather than

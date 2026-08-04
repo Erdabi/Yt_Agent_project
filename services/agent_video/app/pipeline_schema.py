@@ -78,6 +78,54 @@ class ChannelBranding:
     music_bed_path: str | None = None
 
 
+# --- Visual Beat Planning ------------------------------------------------
+
+
+@dataclass(frozen=True)
+class VisualBeat:
+    """One distinct visual moment inside a segment.
+
+    A segment's narration is usually far too long to sit under a single
+    still image — a 19-second beat holding one frame is what makes a
+    generated video read as a slideshow rather than a video. This type is
+    the unit that fixes that: Visual Beat Planning subdivides each
+    segment's narration into several of these, each covering its own
+    slice of the spoken text, and each becoming its own generated visual.
+
+    `start_sec`/`end_sec` are *segment-relative* (0 = the moment this
+    segment's narration starts), matching `SubtitleCue`'s convention —
+    Timeline Building remains the only module that computes absolute
+    project time (see this module's own docstring).
+    """
+
+    segment_id: str
+    order_index: int
+    #: 0-based position within this segment's own beats. Together with
+    #: `segment_id` it uniquely identifies a beat across the project,
+    #: which is what makes it usable as a cache-variation key (see
+    #: `PlannedAsset.variation_key`).
+    beat_index: int
+    start_sec: float
+    end_sec: float
+    #: The slice of the segment's narration this beat is on screen for —
+    #: what makes each beat's generated visual match what is actually
+    #: being said at that moment, rather than the segment as a whole.
+    narration_text: str
+    #: Which of the segment's `asset_requirements` this beat realizes.
+    #: Several beats can share one requirement (a segment usually
+    #: declares fewer requirements than it needs visuals for).
+    requirement_index: int
+    asset_type: AssetType
+    #: The requirement's own content description, unmodified — Visual
+    #: Prompt Composition combines it with `narration_text` and the
+    #: segment's production metadata to build the final prompt.
+    requirement_description: str
+
+    @property
+    def duration_sec(self) -> float:
+        return self.end_sec - self.start_sec
+
+
 # --- Asset Planning ---------------------------------------------------
 
 
@@ -126,7 +174,7 @@ class PlannedAsset:
     #: Position within the segment's own `asset_requirements` list — a
     #: segment can plan more than one asset (e.g. a stock clip AND a
     #: sound effect), so `(segment_id, requirement_index)` together
-    #: identify one planned asset uniquely.
+    #: identify one planned *requirement* uniquely.
     requirement_index: int
     asset_type: AssetType
     description: str
@@ -136,6 +184,23 @@ class PlannedAsset:
     provider_capability: str | None
     shot_type: ShotType | None
     is_audio: bool
+    #: Which visual beat within the segment this realizes, and how long
+    #: it is on screen — both `None` for assets that aren't per-beat
+    #: visuals (segment-wide audio, render-time text overlays), which
+    #: still get exactly one planned asset per requirement as before.
+    beat_index: int | None = None
+    start_sec: float | None = None
+    duration_sec: float | None = None
+    #: Distinguishes two otherwise-identical provider requests that must
+    #: NOT share bytes. The Asset Cache is content-addressed by request
+    #: (asset_cache.py), which is right for avoiding repeat work but
+    #: wrong for visuals *within one video*: two beats that happen to
+    #: produce the same prompt would otherwise collapse onto the same
+    #: image file and the video would visibly repeat. Deriving this from
+    #: `(segment_id, beat_index)` keeps it deterministic — re-running the
+    #: same job still hits the cache — while guaranteeing distinct beats
+    #: never do. `None` for non-visual assets, where sharing is correct.
+    variation_key: str | None = None
 
 
 # --- Asset Generation ---------------------------------------------------
@@ -158,6 +223,13 @@ class ResolvedAsset:
     #: `Asset.provider`. `None` for `RENDER_TIME_OVERLAY` entries.
     provider_name: str | None
     description: str
+    #: Carried through unchanged from the `PlannedAsset` this resolves,
+    #: so Timeline Building can order a segment's visuals by beat and
+    #: Rendering can give each one its own on-screen duration instead of
+    #: dividing the segment evenly. `None` for non-per-beat assets.
+    beat_index: int | None = None
+    start_sec: float | None = None
+    duration_sec: float | None = None
 
 
 # --- Voice Generation ---------------------------------------------------

@@ -36,6 +36,26 @@ from libs.schemas.script_production import (
 )
 
 
+#: Stripped from word edges before comparing two beats' vocabularies
+#: (`_validate_beat_distinctness`) so "coffee." and "coffee" count as the
+#: same word rather than inflating a repeated beat's apparent novelty.
+_PUNCTUATION = ".,!?;:\"'()[]—–-"
+
+#: Vocabulary-overlap fraction at or above which two beats are treated as
+#: the same beat restated rather than two genuinely different ones. Set
+#: from the observed failure mode: a degenerating model's restatements
+#: overlapped well above this, while distinct beats of a real script sit
+#: far below it (they share only topic words and function words).
+_MAX_BEAT_SIMILARITY = 0.8
+
+#: Beats shorter than this are exempt from the *fuzzy* check above
+#: (verbatim repeats are still always rejected). Two genuinely different
+#: short beats — a one-line hook and a one-line call to action — can
+#: legitimately share most of a small vocabulary without either being a
+#: copy, so scoring them would produce false rejections.
+_MIN_WORDS_FOR_SIMILARITY_CHECK = 12
+
+
 @dataclass(frozen=True)
 class ScriptBeat:
     voiceover_text: str
@@ -303,6 +323,85 @@ def _beat_covers_visual(beat: ScriptBeat) -> bool:
     return any(req.asset_type in VISUAL_ASSET_TYPES for req in beat.production.asset_requirements)
 
 
+def _labelled_beats(script: GeneratedScript) -> list[tuple[str, ScriptBeat]]:
+    """Every beat in narration order, each with the human-readable label
+    used in validation errors. Shared by the validators below so they
+    can't drift apart on what counts as "a beat".
+    """
+    return [
+        ("hook", script.hook),
+        ("introduction", script.introduction),
+        *(
+            (f'main_sections[{i}] ("{section.heading}")', section)
+            for i, section in enumerate(script.main_sections)
+        ),
+        ("ending", script.ending),
+        ("call_to_action", script.call_to_action),
+    ]
+
+
+def _normalized_words(text: str) -> list[str]:
+    return [word.strip(_PUNCTUATION).lower() for word in text.split() if word.strip(_PUNCTUATION)]
+
+
+def _similarity(left: set[str], right: set[str]) -> float:
+    """Jaccard overlap of two beats' vocabularies. Deliberately a *set*
+    comparison rather than a sequence diff: a model that degenerates into
+    repetition reuses the same words in near-identical proportions, and
+    word order is exactly the thing that varies slightly between one
+    restatement and the next — so ordering-insensitive overlap is what
+    actually catches it.
+    """
+    if not left or not right:
+        return 0.0
+    return len(left & right) / len(left | right)
+
+
+def _validate_beat_distinctness(script: GeneratedScript) -> None:
+    """Every beat must say something new.
+
+    A weak or degenerating model can satisfy every other constraint in
+    this schema while emitting the *same paragraph* several times over —
+    each copy independently well-formed, so no per-beat rule catches it.
+    That failure is invisible here but catastrophic downstream: identical
+    narration text hits the Asset Cache's content-addressed key
+    (services/agent_video/app/asset_cache.py), so duplicated beats
+    collapse onto literally the same narration audio *and* the same
+    generated image, and the finished video visibly loops. This is the
+    only place in the pipeline that can see the whole script at once, so
+    it's the only place that can reject that shape.
+
+    Raises `ValueError`, handled exactly like `_validate_asset_coverage`'s:
+    `generate()` turns it into a hard `ScriptGenerationError`; `review()`
+    falls back to the prior, already-valid draft.
+    """
+    seen: list[tuple[str, list[str], set[str]]] = []
+    for label, beat in _labelled_beats(script):
+        words = _normalized_words(beat.voiceover_text)
+        vocabulary = set(words)
+        for prior_label, prior_words, prior_vocabulary in seen:
+            if words and words == prior_words:
+                raise ValueError(
+                    f"{label} repeats {prior_label} verbatim — every beat must advance the "
+                    "script with new narration, not restate an earlier one"
+                )
+            # Only fuzzy-match beats with enough substance for the
+            # overlap score to mean anything: two short beats (a hook, a
+            # call to action) can legitimately share most of their small
+            # vocabulary without either being a copy of the other.
+            if (
+                len(words) >= _MIN_WORDS_FOR_SIMILARITY_CHECK
+                and len(prior_words) >= _MIN_WORDS_FOR_SIMILARITY_CHECK
+                and _similarity(vocabulary, prior_vocabulary) >= _MAX_BEAT_SIMILARITY
+            ):
+                raise ValueError(
+                    f"{label} is near-identical to {prior_label} "
+                    f"({_similarity(vocabulary, prior_vocabulary):.0%} vocabulary overlap) — "
+                    "every beat must advance the script with new narration"
+                )
+        seen.append((label, words, vocabulary))
+
+
 def _validate_asset_coverage(script: GeneratedScript) -> None:
     """Every beat's `scene_description`/`visual_suggestions` describes a
     visual — both are required, non-empty fields for every beat (see
@@ -319,17 +418,7 @@ def _validate_asset_coverage(script: GeneratedScript) -> None:
     an initial draft); `review()`'s existing exception handling already
     catches it and falls back to the prior, already-valid draft.
     """
-    beats: list[tuple[str, ScriptBeat]] = [
-        ("hook", script.hook),
-        ("introduction", script.introduction),
-        *(
-            (f'main_sections[{i}] ("{section.heading}")', section)
-            for i, section in enumerate(script.main_sections)
-        ),
-        ("ending", script.ending),
-        ("call_to_action", script.call_to_action),
-    ]
-    for label, beat in beats:
+    for label, beat in _labelled_beats(script):
         if not _beat_covers_visual(beat):
             raise ValueError(
                 f"{label} describes a visual (scene_description/visual_suggestions) "
@@ -340,9 +429,9 @@ def _validate_asset_coverage(script: GeneratedScript) -> None:
 
 def script_from_dict(raw: dict, *, review_notes: str = "") -> GeneratedScript:
     """Parse one `propose_script`/`submit_reviewed_script` tool-call
-    payload into a `GeneratedScript`, validating asset coverage before
-    returning it. `review_notes` is supplied by the caller since only the
-    review tool's schema includes that field.
+    payload into a `GeneratedScript`, validating asset coverage and beat
+    distinctness before returning it. `review_notes` is supplied by the
+    caller since only the review tool's schema includes that field.
     """
     script = GeneratedScript(
         structure_notes=raw["structure_notes"],
@@ -355,6 +444,7 @@ def script_from_dict(raw: dict, *, review_notes: str = "") -> GeneratedScript:
         review_notes=review_notes,
     )
     _validate_asset_coverage(script)
+    _validate_beat_distinctness(script)
     return script
 
 

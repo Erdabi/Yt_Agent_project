@@ -62,7 +62,19 @@ class TimelineBuildingModule:
             end_sec = start_sec + voice_segment.duration_sec
 
             segment_assets = assets_by_segment.get(segment.segment_id, [])
-            visual_assets = [asset for asset in segment_assets if not asset.is_audio]
+            # Ordered by visual beat: a segment now holds several visuals
+            # in sequence (Visual Beat Planning), and the order they were
+            # resolved in is not necessarily the order they appear on
+            # screen. Assets with no beat (a render-time text overlay,
+            # which spans the whole segment) sort last, after the
+            # beat-sequenced visuals they overlay.
+            visual_assets = sorted(
+                (asset for asset in segment_assets if not asset.is_audio),
+                key=lambda asset: (
+                    asset.beat_index is None,
+                    asset.beat_index if asset.beat_index is not None else 0,
+                ),
+            )
             supplementary_audio = [asset for asset in segment_assets if asset.is_audio]
 
             shifted_cues = [

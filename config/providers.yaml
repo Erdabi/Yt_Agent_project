@@ -172,11 +172,36 @@ image_gen:
       config:
         base_url: http://127.0.0.1:8188
         workflow_template: config/comfyui/text_to_image.json
-        width: 1280
-        height: 720
-        steps: 20
+        # width/height are the resolution the *model* generates at, not
+        # the final output size: the workflow's hires pass then enlarges
+        # and re-diffuses that render, which is what actually adds
+        # detail. 768x432 keeps the base pass near what an SD1.5-class
+        # checkpoint is trained for — going much wider is what produces
+        # duplicated faces and repeated horizons.
+        #
+        # 2x (-> 1536x864) rather than a larger factor that would land
+        # exactly on 1920x1080: the hires pass re-diffuses at the
+        # upscaled size, and the same coherence limit that caps the base
+        # pass applies again there. Measured here, a 1920x1080 hires
+        # pass on an SD1.5-class checkpoint was so slow it never
+        # completed on CPU, and that resolution is well past where this
+        # model family stays coherent. The compositor's final scale from
+        # 1536x864 to 1080p is a 1.25x resize, which costs far less
+        # quality than an incoherent render would.
+        width: 768
+        height: 432
+        upscale_factor: 2.0
+        steps: 28
+        hires_steps: 12
+        hires_denoise: 0.45
+        sampler: dpmpp_2m
+        scheduler: karras
+        cfg: 6.5
         poll_interval_sec: 2
-        poll_timeout_sec: 300
+        # A two-pass hires render is substantially slower than the
+        # single pass this replaced — on GPU it's seconds, but this
+        # budget has to hold on CPU-only hardware too.
+        poll_timeout_sec: 900
       # No secret_ref: a local ComfyUI instance needs no API key.
     stub:
       class: libs.providers.image_gen.stub_provider.StubImageGenProvider

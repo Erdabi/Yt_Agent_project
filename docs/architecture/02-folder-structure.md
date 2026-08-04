@@ -66,11 +66,12 @@ yt-agent/
 │   │       └── script_schema.py      # Claude tool-schema + GeneratedScript dataclasses (imports shared types
 │   │                                 # from libs/schemas/script_production.py — see that entry below)
 │   │
-│   ├── agent_video/                  # one agent, six pipeline modules, plus the Thumbnail Agent
+│   ├── agent_video/                  # one agent, seven pipeline modules, plus the Thumbnail Agent
 │   │   │                             # invoked in-process — see 03-agent-responsibilities.md §3.4
 │   │   └── app/
 │   │       ├── worker.py             # Celery task entrypoints: agents.video.run + agents.thumbnail.run (queue: video)
-│   │       ├── video_agent.py        # VideoAgent.run() calls the six modules below in sequence, then the Thumbnail Agent
+│   │       ├── video_agent.py        # VideoAgent.run() calls the seven modules below in sequence, then the Thumbnail Agent
+│   │       ├── visual_prompt.py       # composes a cinematic generation prompt per visual beat (framing/lighting/medium/quality)
 │   │       ├── thumbnail_agent.py     # ThumbnailAgent(BaseAgent) — a genuine, independent agent (see below)
 │   │       ├── thumbnail_concept_generator.py  # Claude forced tool-use call: topic/title/script/branding -> ranked concepts
 │   │       ├── pipeline_schema.py     # typed input/output contracts shared by every module below,
@@ -79,7 +80,8 @@ yt-agent/
 │   │       │                         # below (and thumbnail_agent.py's) — checks for an identical prior
 │   │       │                         # request before calling a provider
 │   │       └── modules/
-│   │           ├── asset_planning.py      # routes asset_requirements to capabilities — no provider calls
+│   │           ├── visual_beat_planning.py # splits each segment's narration into 3-6s visual beats from real measured audio — no provider calls
+│   │           ├── asset_planning.py      # routes each beat + segment-wide requirements to capabilities — no provider calls
 │   │           ├── asset_generation.py    # checks AssetCache, else calls image_gen/video_gen/stock_media/audio_library, persists Asset+StoryboardShot
 │   │           ├── voice_generation.py    # checks AssetCache, else calls tts, persists Asset+Voiceover
 │   │           ├── subtitle_generation.py # caption cues from real or estimated word timing — no provider calls

@@ -27,13 +27,21 @@ from libs.providers.base import Provider
 @dataclass(frozen=True)
 class VisualClip:
     """One visual shown during a segment. `kind` distinguishes a static
-    image (looped to fill its slice of the segment's duration) from a
-    video clip (trimmed/looped to fill it) — a compositor needs to treat
-    the two differently.
+    image (held for its slice of the segment's duration) from a video
+    clip (trimmed, or extended by holding its final frame, to fill it) —
+    a compositor needs to treat the two differently.
     """
 
     data: bytes
     kind: str  # "image" | "video"
+    #: How long this clip holds the screen. Set by the caller from the
+    #: visual beat this clip realizes, so a segment's visuals can have
+    #: genuinely different lengths (a beat is sized from the narration it
+    #: covers, and narration slices are not uniform). `None` means the
+    #: caller has no per-clip timing, in which case a provider divides
+    #: the segment evenly across its clips — the pre-beat behavior, kept
+    #: so a caller that doesn't compute beats still renders correctly.
+    duration_sec: float | None = None
 
 
 @dataclass(frozen=True)
