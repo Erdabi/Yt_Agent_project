@@ -3,6 +3,14 @@
 .env.*
 !.env.example
 
+# Machine-specific provider overrides. `config/providers.yaml` is the
+# committed, shared configuration; a `providers.local*.yaml` alongside it
+# is one machine's own copy (different resolutions/timeouts/model sizes
+# for the hardware actually available there), selected by pointing that
+# machine's PROVIDERS_CONFIG_PATH at it. Same reasoning as .env above:
+# real and useful locally, misleading if shared.
+config/providers.local*.yaml
+
 # Python
 __pycache__/
 *.py[cod]
