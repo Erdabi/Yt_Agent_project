@@ -72,7 +72,7 @@ from libs.models import (
     Voiceover,
 )
 from libs.models.enums import JobStatus, ProjectStage, ProjectStatus
-from libs.providers.base import ProviderConfigError
+from libs.providers.base import ProviderConfigError, ProviderReadiness
 from libs.providers.registry import get_provider
 from libs.storage.registry import get_storage_backend
 
@@ -168,56 +168,118 @@ def run_preflight(settings) -> None:
                 print(f"  ComfyUI      OK  ({settings.comfyui_url}) [{capability}]")
                 checked_comfyui_urls.add(base_url)
 
+    # Reachable is not the same as usable, so report what each capability
+    # says about itself too. This never fails the run: a capability being
+    # unavailable is a normal, supported configuration — it just narrows
+    # which asset types the Script Agent is allowed to ask for, and the
+    # operator should be able to see that narrowing happen rather than
+    # infer it later from a script that came back without any b-roll.
+    print("  capability readiness (constrains what the script may ask for):")
+    for capability, readiness in sorted(capability_readiness().items()):
+        if readiness.ready:
+            print(f"    {capability:<14} available")
+        else:
+            print(f"    {capability:<14} UNAVAILABLE — {readiness.reason}")
+
     print()
 
 
-def _supported_asset_types() -> list[str]:
-    """Which script `asset_type`s can actually be fulfilled right now,
-    derived from which capability's *active* provider is real vs. a
-    `Stub*Provider` — the same config/providers.yaml this whole system
-    already treats as the single source of truth for that (see
-    libs/providers/registry.py), not a separate guess.
+def capability_readiness() -> dict[str, ProviderReadiness]:
+    """Asks each asset-backing capability's *active* provider whether it
+    can actually serve a request right now (`Provider.check_readiness()`,
+    libs/providers/base.py), resolved through the same
+    config/providers.yaml this whole system already treats as the single
+    source of truth (libs/providers/registry.py).
+
+    This deliberately asks the provider rather than inspecting its class
+    name. "The configured class isn't a `Stub*`" answers a different,
+    weaker question — whether an integration was *written* — and the two
+    come apart exactly where it hurts most: a real `ComfyUIVideoProvider`
+    pointed at a ComfyUI that lacks the custom nodes its workflow needs
+    passes the class-name test and then fails every single request with
+    HTTP 400. Getting that wrong here is not a cosmetic error, because
+    this function's answer becomes a hard constraint in the Script
+    Agent's prompt: claim a capability the box can't deliver and the
+    script is written around assets that can never be produced, so the
+    run dies at video_creation with a whole script already generated.
     """
-    supported = list(_ALWAYS_SUPPORTED_ASSET_TYPES)
-    checked_capabilities: dict[str, bool] = {}
-    for asset_type, capability in _ASSET_TYPE_CAPABILITY.items():
-        if capability not in checked_capabilities:
-            try:
-                provider = get_provider(capability)
-                checked_capabilities[capability] = not type(provider).__name__.startswith("Stub")
-            except ProviderConfigError:
-                checked_capabilities[capability] = False
-        if checked_capabilities[capability]:
-            supported.append(asset_type)
-    return supported
+    readiness: dict[str, ProviderReadiness] = {}
+    for capability in dict.fromkeys(_ASSET_TYPE_CAPABILITY.values()):
+        try:
+            readiness[capability] = get_provider(capability).check_readiness()
+        except ProviderConfigError as exc:
+            readiness[capability] = ProviderReadiness.unavailable(
+                f"no usable provider configured for {capability}: {exc}"
+            )
+    return readiness
+
+
+def _supported_asset_types(readiness: dict[str, ProviderReadiness] | None = None) -> list[str]:
+    """Which script `asset_type`s can actually be fulfilled right now."""
+    resolved = capability_readiness() if readiness is None else readiness
+    return list(_ALWAYS_SUPPORTED_ASSET_TYPES) + [
+        asset_type
+        for asset_type, capability in _ASSET_TYPE_CAPABILITY.items()
+        if capability in resolved and resolved[capability].ready
+    ]
 
 
 # --- channel + goal -------------------------------------------------------
+
+
+def _compose_persona(operator_persona: str | None, production_note: str) -> str:
+    return f"{operator_persona}\n\n{production_note}" if operator_persona else production_note
 
 
 def get_or_create_channel(
     *,
     name: str,
     niche: str | None,
-    persona: str | None,
+    operator_persona: str | None,
+    production_note: str,
     banned_topics: list[str],
 ) -> tuple[str, bool]:
     """Returns `(channel_id, created)`. Reuses an existing channel with
-    this exact name if one exists (its `persona_config` is left
-    untouched in that case — this never silently rewrites a channel a
-    prior run already set up); otherwise creates one exactly the way
+    this exact name if one exists; otherwise creates one exactly the way
     `POST /channels` does (services/orchestrator/app/api/channels.py),
     just via a direct session instead of an HTTP round-trip, since this
     script already talks to the database directly for everything else.
+
+    Reuse refreshes the production-constraint note and nothing else. The
+    operator's own persona text is theirs and is never rewritten — it is
+    kept verbatim under its own `operator_persona` key precisely so the
+    two can be told apart — but the note is not authored content, it is
+    a *snapshot of this machine's capabilities* that this script derives
+    (see `build_production_constraint_note()`). Snapshots go stale, and
+    a stale one is worse than no note at all: a channel first set up
+    when a capability was broken would keep telling the Script Agent to
+    avoid it forever, and — the way this actually bit — a channel set up
+    when a capability was wrongly believed *available* would keep
+    requesting assets that cannot be produced, long after the detection
+    bug behind it was fixed. Recomputing on every run is what makes the
+    note describe the environment the job is about to run in.
     """
     with sync_session_scope() as session:
         existing = session.scalar(select(Channel).where(Channel.name == name))
         if existing is not None:
+            persona_config = dict(existing.persona_config or {})
+            # Channels created before `operator_persona` was tracked
+            # separately have only the merged text, and there is no
+            # reliable way to split the note back out of it. Trust this
+            # run's flag instead of guessing at the old blob.
+            stored_operator_persona = persona_config.get("operator_persona")
+            operator_text = (
+                operator_persona if operator_persona is not None else stored_operator_persona
+            )
+            if operator_text:
+                persona_config["operator_persona"] = operator_text
+            persona_config["persona"] = _compose_persona(operator_text, production_note)
+            existing.persona_config = persona_config
             return str(existing.id), False
 
-        persona_config: dict = {}
-        if persona:
-            persona_config["persona"] = persona
+        persona_config = {"persona": _compose_persona(operator_persona, production_note)}
+        if operator_persona:
+            persona_config["operator_persona"] = operator_persona
         if banned_topics:
             persona_config["banned_topics"] = banned_topics
 
@@ -227,18 +289,30 @@ def get_or_create_channel(
         return str(channel.id), True
 
 
-def build_production_constraint_note() -> str:
-    supported = sorted(set(_supported_asset_types()))
-    return (
+def build_production_constraint_note(
+    readiness: dict[str, ProviderReadiness] | None = None,
+) -> str:
+    resolved = capability_readiness() if readiness is None else readiness
+    supported = sorted(set(_supported_asset_types(resolved)))
+    # Named explicitly rather than left implicit: a model told only what
+    # it *may* use still reaches for a plausible-sounding neighbour, and
+    # deriving the forbidden list from the same readiness answer keeps
+    # the two halves of this instruction from ever contradicting each
+    # other the way a hand-maintained list of names would.
+    unsupported = sorted(set(_ASSET_TYPE_CAPABILITY) - set(supported))
+    note = (
         "PRODUCTION CONSTRAINT (hard requirement, not a style preference): "
         "this channel's video pipeline can only fulfill these production "
         f"asset_requirements asset_type values today: {', '.join(supported)}. "
-        "Every beat's asset_requirements must be drawn only from that list — "
-        "never propose ai_video, stock_footage, sound_effect, or "
-        "background_music_cue unless one of those is listed above, since no "
-        "working provider is configured for whichever of those is missing "
-        "and using it would fail the video, not just look different."
+        "Every beat's asset_requirements must be drawn only from that list."
     )
+    if unsupported:
+        note += (
+            f" Never propose {', '.join(unsupported)} — no working provider is "
+            "configured for those, so using one would fail the video outright, "
+            "not just look different."
+        )
+    return note
 
 
 def submit_goal(channel_id: str, goal: str) -> str:
@@ -466,18 +540,19 @@ def main(argv: list[str] | None = None) -> int:
             run_preflight(settings)
 
         production_note = build_production_constraint_note()
-        persona = f"{args.persona}\n\n{production_note}" if args.persona else production_note
 
         channel_id, created = get_or_create_channel(
             name=args.channel_name,
             niche=args.channel_niche,
-            persona=persona,
+            operator_persona=args.persona,
+            production_note=production_note,
             banned_topics=args.banned_topics,
         )
         print(f"== Channel {'created' if created else 'reused'}: {channel_id} ==")
+        print(f"  {production_note}")
         if not created:
-            print("  (existing channel's persona_config was left untouched — the production-constraint")
-            print("   note above only applies to newly created channels)")
+            print("  (reused channel: the production-constraint note above was refreshed to match")
+            print("   this machine; any persona text you set previously was left as-is)")
 
         project_id = submit_goal(channel_id, args.goal)
         print(f"== Goal submitted, project created: {project_id} ==\n")

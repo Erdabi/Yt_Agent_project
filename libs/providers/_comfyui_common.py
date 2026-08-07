@@ -38,6 +38,8 @@ from typing import Any
 
 import requests
 
+from .base import ProviderReadiness
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -67,6 +69,21 @@ def load_workflow_template(path: str) -> tuple[dict[str, Any], str | None]:
     if not isinstance(workflow, dict) or not workflow:
         raise ComfyUIAPIError(f"ComfyUI workflow template has no 'workflow' graph: {template_path}")
     return workflow, data.get("output_node_title")
+
+
+def workflow_node_types(workflow: dict[str, Any]) -> set[str]:
+    """Every `class_type` the graph references — i.e. exactly the set of
+    node classes ComfyUI must have installed for this workflow to be
+    accepted. ComfyUI validates this itself and rejects an unknown class
+    with HTTP 400 `missing_node_type`; reading the same set up front is
+    what lets a provider answer `check_readiness()` before a job is
+    dispatched rather than after it has already failed.
+    """
+    return {
+        node["class_type"]
+        for node in workflow.values()
+        if isinstance(node, dict) and isinstance(node.get("class_type"), str)
+    }
 
 
 def render_workflow(workflow: dict[str, Any], substitutions: dict[str, Any]) -> dict[str, Any]:
@@ -144,6 +161,24 @@ class ComfyUIClient:
         prompt_id = self._submit(workflow)
         history_entry = self._poll_until_complete(prompt_id)
         return self._fetch_output(history_entry, prompt_id, node_id, media_keys)
+
+    def installed_node_types(self) -> set[str]:
+        """The node classes this ComfyUI instance actually has loaded,
+        from its `/object_info` endpoint (whose top-level keys are the
+        registered class names). Raises `ComfyUIAPIError` when ComfyUI
+        is unreachable — callers deciding readiness treat that as "not
+        ready", but they make that call themselves rather than having an
+        empty set silently stand in for an unreachable server.
+        """
+        response = self._request_with_retry("GET", f"{self._base_url}/object_info")
+        return set(self._json(response))
+
+    def missing_node_types(self, workflow: dict[str, Any]) -> set[str]:
+        """Which of `workflow`'s node classes this instance is missing —
+        empty when it can run the graph. This is the check ComfyUI would
+        perform at submit time, run early enough to be actionable.
+        """
+        return workflow_node_types(workflow) - self.installed_node_types()
 
     # --- submit -------------------------------------------------------------
 
@@ -261,3 +296,34 @@ class ComfyUIClient:
                 f"ComfyUI returned a non-JSON response ({response.status_code}): "
                 f"{response.text[:500]}"
             ) from exc
+
+
+def check_workflow_readiness(
+    client: ComfyUIClient, workflow: dict[str, Any], *, capability: str
+) -> ProviderReadiness:
+    """Shared `Provider.check_readiness()` body for both ComfyUI
+    providers: this instance is ready for this capability when it has
+    every node class the configured workflow template references.
+
+    A ComfyUI workflow is only as installed as its rarest custom node.
+    Templates that lean on ComfyUI Manager extensions (AnimateDiff's
+    `ADE_*` nodes, VideoHelperSuite's `VHS_*` nodes, ...) are perfectly
+    valid graphs that a stock ComfyUI cannot run at all, and the failure
+    surfaces as a flat HTTP 400 the moment a job is submitted — after a
+    script has already been written around assets that can never be
+    produced. Checking here turns that into a fact available *before*
+    the work is planned.
+    """
+    try:
+        missing = client.missing_node_types(workflow)
+    except ComfyUIAPIError as exc:
+        return ProviderReadiness.unavailable(f"ComfyUI is not reachable for {capability}: {exc}")
+    if missing:
+        return ProviderReadiness.unavailable(
+            f"ComfyUI is running but is missing {len(missing)} node "
+            f"class(es) this {capability} workflow needs: {', '.join(sorted(missing))} — "
+            "install the custom nodes that provide them (ComfyUI Manager), or point "
+            f"{capability}'s `workflow_template` in config/providers.yaml at a graph "
+            "this instance can run."
+        )
+    return ProviderReadiness.ok()

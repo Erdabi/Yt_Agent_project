@@ -7,14 +7,17 @@ deferred to Phase 1 (docs/architecture/06-roadmap.md).
 
 from typing import Any
 
+from ..base import StubProvider
 from .base import StockMediaProvider
 
 
-class StubStockMediaProvider(StockMediaProvider):
+class StubStockMediaProvider(StubProvider, StockMediaProvider):
+    unavailable_reason = (
+        "No real stock media provider is configured. Add one under "
+        "libs/providers/stock_media/, register it in "
+        "config/providers.yaml, and set stock_media.active to its "
+        "name (docs/architecture/06-roadmap.md, Phase 1)."
+    )
+
     def search(self, query: str, **kwargs: Any) -> bytes:
-        raise NotImplementedError(
-            "No real stock media provider is configured. Add one under "
-            "libs/providers/stock_media/, register it in "
-            "config/providers.yaml, and set stock_media.active to its "
-            "name (docs/architecture/06-roadmap.md, Phase 1)."
-        )
+        raise self._unavailable()

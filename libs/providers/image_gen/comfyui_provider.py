@@ -16,7 +16,13 @@ from typing import Any
 
 from libs.core.config import get_settings
 
-from .._comfyui_common import ComfyUIClient, load_workflow_template, render_workflow
+from .._comfyui_common import (
+    ComfyUIClient,
+    check_workflow_readiness,
+    load_workflow_template,
+    render_workflow,
+)
+from ..base import ProviderReadiness
 from .base import ImageGenProvider
 
 _IMAGE_OUTPUT_KEYS = ("images",)
@@ -96,6 +102,9 @@ class ComfyUIImageProvider(ImageGenProvider):
         self._cfg = float(config.get("cfg", 6.5))
         self._seed = config.get("seed")
         self._negative_prompt = config.get("negative_prompt", _DEFAULT_NEGATIVE_PROMPT)
+
+    def check_readiness(self) -> ProviderReadiness:
+        return check_workflow_readiness(self._client, self._workflow, capability="image_gen")
 
     def generate(self, prompt: str, **kwargs: Any) -> bytes:
         seed = kwargs.get("seed", self._seed)

@@ -7,10 +7,16 @@ here, unlike every other capability's `stub` default); this exists for
 completeness and as the pattern for a future non-Anthropic provider.
 """
 
+from ..base import StubProvider
 from .base import LLMProvider, LLMToolCall, LLMToolResult
 
 
-class StubLLMProvider(LLMProvider):
+class StubLLMProvider(StubProvider, LLMProvider):
+    unavailable_reason = (
+        "No real LLM provider is configured. Add one under libs/providers/llm/, "
+        "register it in config/providers.yaml, and set llm.active to its name."
+    )
+
     @property
     def model(self) -> str:
         return "stub"
@@ -24,7 +30,4 @@ class StubLLMProvider(LLMProvider):
         images: list[bytes] | None = None,
         enable_web_research: bool = False,
     ) -> LLMToolResult:
-        raise NotImplementedError(
-            "No real LLM provider is configured. Add one under libs/providers/llm/, "
-            "register it in config/providers.yaml, and set llm.active to its name."
-        )
+        raise self._unavailable()

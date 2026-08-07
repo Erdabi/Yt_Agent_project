@@ -118,6 +118,39 @@ class ManagerAgent:
                     ),
                 )
 
+            # The same net, in the other direction. The engine is asked
+            # for judgment — "is this failure worth another attempt?" —
+            # but it is handed `retry_count`/`max_retries` as context and
+            # can reason about them wrongly, which is not a hypothetical:
+            # a run escalated a first-attempt scripting failure saying
+            # "this project has reached its retry limit" with 0 of 3
+            # retries used. Escalation means *stop automation and require
+            # a person*, so honoring that spends a human's attention while
+            # the project's own budget sits untouched — strictly worse
+            # than trying again. Budget arithmetic belongs to the code in
+            # both directions; only the judgment belongs to the engine.
+            #
+            # This deliberately costs a genuinely permanent failure its
+            # full retry budget before it reaches a human. That is the
+            # right trade: attempts are bounded and cheap, the ceiling
+            # above still guarantees termination, and most agent failures
+            # here are non-deterministic (a model producing malformed or
+            # rule-violating output) — exactly the kind another attempt
+            # fixes.
+            elif (
+                decision.action == WorkflowAction.ESCALATE
+                and job_status == JobStatus.FAILED
+                and retry_count < max_retries
+            ):
+                decision = Decision(
+                    action=WorkflowAction.RETRY,
+                    reasoning=(
+                        f"Retry budget remains ({retry_count}/{max_retries} used); "
+                        f"retrying instead of honoring an escalation decision "
+                        f"(reasoning engine said: {decision.reasoning})"
+                    ),
+                )
+
             logger.info(
                 "manager_decision",
                 action=decision.action,

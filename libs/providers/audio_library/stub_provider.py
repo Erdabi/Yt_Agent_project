@@ -7,14 +7,17 @@ deferred to Phase 1 (docs/architecture/06-roadmap.md).
 
 from typing import Any
 
+from ..base import StubProvider
 from .base import AudioLibraryProvider
 
 
-class StubAudioLibraryProvider(AudioLibraryProvider):
+class StubAudioLibraryProvider(StubProvider, AudioLibraryProvider):
+    unavailable_reason = (
+        "No real audio library provider is configured. Add one under "
+        "libs/providers/audio_library/, register it in "
+        "config/providers.yaml, and set audio_library.active to its "
+        "name (docs/architecture/06-roadmap.md, Phase 1)."
+    )
+
     def search(self, description: str, **kwargs: Any) -> bytes:
-        raise NotImplementedError(
-            "No real audio library provider is configured. Add one under "
-            "libs/providers/audio_library/, register it in "
-            "config/providers.yaml, and set audio_library.active to its "
-            "name (docs/architecture/06-roadmap.md, Phase 1)."
-        )
+        raise self._unavailable()

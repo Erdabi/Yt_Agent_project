@@ -29,9 +29,24 @@ inventing a fake script would defeat the entire purpose of this agent.
 The model itself is whichever `llm` provider config/providers.yaml has
 active (Ollama by default) — this module never imports a vendor SDK
 directly, only `libs.providers.get_provider("llm")`.
+
+One thing this module does do beyond a single call: when
+`script_from_dict()` rejects the draft, it hands the rejected script and
+the exact rejection message back to the model and asks for that one
+defect to be fixed (`SCRIPT_REPAIR_ATTEMPTS`, default 2). Those
+validations are deterministic and their messages name the offending beat
+precisely — so the information needed to fix the script already exists at
+the moment of failure, and throwing it away to resample the identical
+prompt wastes the best signal available. Repair is bounded, never
+weakens or skips a validation (the repaired script goes through exactly
+the same `script_from_dict()`), and a script that still fails after the
+last attempt raises `ScriptGenerationError` exactly as it did before.
 """
 
+import json
+
 from libs.context import ProjectContext
+from libs.core.config import get_settings
 from libs.core.logging import get_logger
 from libs.llm_usage import track_llm_call
 from libs.prompts import PromptNotFoundError, PromptRenderError, get_prompt_loader
@@ -139,8 +154,85 @@ class ScriptGenerator:
         if not result.tool_input["main_sections"]:
             raise ScriptGenerationError("the model returned a script with no main sections")
 
+        return self._parse_with_repair(result.tool_input, context)
+
+    def _parse_with_repair(self, payload: dict, context: ProjectContext) -> GeneratedScript:
+        """Validates `payload`, and on rejection asks the model to fix
+        the specific defect the validator named, up to
+        `SCRIPT_REPAIR_ATTEMPTS` times.
+
+        The validation itself is untouched on every pass — a repaired
+        script has to satisfy exactly the same `script_from_dict()` as
+        the original, so this can only ever turn a rejected script into a
+        genuinely valid one, never into an accepted-but-invalid one.
+        """
+        attempts_left = max(get_settings().script_repair_attempts, 0)
+        while True:
+            try:
+                return script_from_dict(payload)
+            except ValueError as exc:
+                if attempts_left <= 0:
+                    logger.error("script_generator_invalid_script", error=str(exc))
+                    raise ScriptGenerationError(str(exc)) from exc
+                logger.warning(
+                    "script_generator_repairing",
+                    error=str(exc),
+                    attempts_left=attempts_left,
+                )
+                try:
+                    payload = self._repair(payload, str(exc), context)
+                except ScriptGenerationError as repair_exc:
+                    # The repair call itself failed (provider down, bad
+                    # template, refusal). Report the original rejection —
+                    # that is the script's actual problem — while naming
+                    # the repair failure so a genuine outage isn't hidden
+                    # behind a validation message.
+                    raise ScriptGenerationError(
+                        f"{exc} (repair attempt also failed: {repair_exc})"
+                    ) from exc
+                attempts_left -= 1
+
+    def _repair(self, rejected: dict, validation_error: str, context: ProjectContext) -> dict:
+        provider = get_provider("llm")
         try:
-            return script_from_dict(result.tool_input)
-        except ValueError as exc:
-            logger.error("script_generator_invalid_script", error=str(exc))
-            raise ScriptGenerationError(str(exc)) from exc
+            system_template = self._prompts.get(
+                "script",
+                "repair_script_system",
+                version=context.prompt_version,
+                provider=_PROMPT_PROVIDER,
+            )
+            user_prompt = self._prompts.get(
+                "script",
+                "repair_script_user",
+                version=context.prompt_version,
+                provider=_PROMPT_PROVIDER,
+            ).render(
+                validation_error=validation_error,
+                rejected_script=json.dumps(rejected, indent=2, ensure_ascii=False),
+            )
+        except (PromptNotFoundError, PromptRenderError) as exc:
+            raise ScriptGenerationError(f"prompt template error: {exc}") from exc
+
+        try:
+            with track_llm_call(
+                project_id=context.project.project_id,
+                agent_name="script",
+                call_site="script_generator.repair",
+                provider=type(provider).__name__,
+                model=provider.model,
+                prompt_name="repair_script",
+                prompt_version=system_template.version,
+            ) as usage:
+                result = provider.generate_tool_call(
+                    system_prompt=system_template.render(),
+                    user_prompt=user_prompt,
+                    tool=_PROPOSE_SCRIPT_TOOL,
+                )
+                usage["input_tokens"] = result.input_tokens
+                usage["output_tokens"] = result.output_tokens
+        except LLMProviderError as exc:
+            raise ScriptGenerationError(f"LLM call failed: {exc}") from exc
+
+        if not result.tool_input.get("main_sections"):
+            raise ScriptGenerationError("the repair returned a script with no main sections")
+        return result.tool_input

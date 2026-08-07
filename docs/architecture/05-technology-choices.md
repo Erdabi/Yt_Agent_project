@@ -43,6 +43,30 @@ Quality Control, Publisher) routes through the same swappable
 `libs.providers.get_provider("llm")` capability — none of them import a
 vendor SDK directly.
 
+**Readiness (`Provider.check_readiness()`).** A provider being
+*implemented* is not the same as its backend being *able*, and callers
+that need to plan around a capability have to be able to tell the
+difference. `check_readiness()` returns a `ProviderReadiness(ready,
+reason)`; it defaults to ready, so implementing it stays optional for a
+provider with nothing cheap to probe, and it never raises — an
+unreachable backend is a legitimate "no", not an error the caller must
+catch. Stub providers (`StubProvider`) always answer not-ready, from the
+same `unavailable_reason` string their `NotImplementedError` carries.
+Both ComfyUI providers answer it for real, by comparing the node classes
+their configured workflow template references against the running
+instance's `/object_info`.
+
+That check exists because of a concrete failure: `video_gen`'s shipped
+template needs AnimateDiff-Evolved custom nodes (see the `video_gen` row
+below), a stock ComfyUI does not have them, and ComfyUI only reports
+that as an HTTP 400 at submit time. `scripts/run_pipeline.py` turns
+capability readiness into a hard constraint in the Script Agent's prompt
+listing which `asset_requirements` types may be requested — so
+mis-answering it does not degrade a video, it writes an entire script
+around assets that can never be produced and fails the run at
+`video_creation`. Approximating readiness as "the class name doesn't
+start with `Stub`" is exactly what produced that outcome.
+
 | Capability | Local default | Cloud alternative | Notes |
 |---|---|---|---|
 | LLM (ideation, scripting, quality control, publish metadata) | Ollama (`qwen3:32b` or any pulled model) | Anthropic Claude API, OpenAI GPT | `libs/providers/llm/ollama_provider.py` talks to a local Ollama server's `/api/chat`, forcing structured output via the `format` request field (grammar-constrained JSON-schema decoding) rather than tool-calling — the same `LLMToolCall.input_schema` every caller already builds for Anthropic works unchanged, no per-provider schema translation. Every reasoning call site (Research's `IdeaGenerator`/`KnowledgeBuilder`, the Script Agent's `ScriptGenerator`/`ScriptReviewer`, the Manager's reasoning engine, the Thumbnail Agent's `ThumbnailConceptGenerator`, the Publisher's `MetadataGenerator`, the Quality Control Agent's reviewers) goes through `libs.providers.get_provider("llm")` — `config/providers.yaml` defaults `llm.active` to `ollama`. One genuine capability gap: Research's `KnowledgeBuilder` needs Anthropic's server-side `web_search`/`web_fetch` tools (`generate_tool_call(..., enable_web_research=True)`) for actually-verified facts/citations — no local model here has an equivalent, so a knowledge package built under Ollama is honestly caveated in `supporting_notes` as reflecting the model's own knowledge rather than live-verified sources, instead of silently presenting unverified claims as researched ones. |

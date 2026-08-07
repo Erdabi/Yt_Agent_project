@@ -1,0 +1,18 @@
+template: |
+  The script you produced was rejected by the automated structural check.
+
+  Rejection reason:
+  {{ validation_error }}
+
+  This is the script that was rejected:
+  {{ rejected_script }}
+
+  Fix exactly the defect named above and return the complete corrected
+  script through the tool.
+metadata:
+  description: >
+    Per-call context for the Script Agent's repair call
+    (services/agent_scriptwriter/app/script_generator.py). Variables:
+    validation_error (the exact message script_from_dict() raised),
+    rejected_script (the rejected tool payload as JSON).
+  owner: script-agent

@@ -7,13 +7,16 @@ key configured. A real implementation exists alongside this one
 
 from typing import Any
 
+from ..base import StubProvider
 from .base import SynthesisResult, TTSProvider
 
 
-class StubTTSProvider(TTSProvider):
+class StubTTSProvider(StubProvider, TTSProvider):
+    unavailable_reason = (
+        "No real text-to-speech provider is configured. Add one under "
+        "libs/providers/tts/, register it in config/providers.yaml, and "
+        "set tts.active to its name (docs/architecture/06-roadmap.md, Phase 1)."
+    )
+
     def synthesize(self, text: str, *, voice_id: str | None = None, **kwargs: Any) -> SynthesisResult:
-        raise NotImplementedError(
-            "No real text-to-speech provider is configured. Add one under "
-            "libs/providers/tts/, register it in config/providers.yaml, and "
-            "set tts.active to its name (docs/architecture/06-roadmap.md, Phase 1)."
-        )
+        raise self._unavailable()

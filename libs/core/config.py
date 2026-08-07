@@ -158,6 +158,15 @@ class Settings(BaseSettings):
     # as manager_prompt_version: pin it to roll back a wording change
     # without a code change.
     script_prompt_version: str = Field(default="latest", alias="SCRIPT_PROMPT_VERSION")
+    # How many times the Script Agent may hand a rejected script back to
+    # the model with the exact validation error and ask it to fix that
+    # one thing (services/agent_scriptwriter/app/script_generator.py).
+    # The validations are deterministic and their messages name the
+    # offending beat precisely, so showing the model what it got wrong is
+    # far more likely to work than resampling the identical prompt and
+    # hoping. Bounded, and 0 disables repair entirely — a rejected script
+    # then fails the job exactly as it did before, which is still honest.
+    script_repair_attempts: int = Field(default=2, alias="SCRIPT_REPAIR_ATTEMPTS")
 
     # --- Thumbnail Agent: prompt template version + concept/render counts --
     # Which version of prompts/thumbnail/generate_concepts_system/ (and its
