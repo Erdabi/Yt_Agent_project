@@ -36,11 +36,8 @@ from libs.schemas.script_production import (
 from services.agent_video.app.asset_cache import AssetCacheKey
 from services.agent_video.app.modules.asset_planning import AssetPlanningModule
 from services.agent_video.app.modules.timeline_building import TimelineBuildingModule
-from services.agent_video.app.modules.visual_beat_planning import (
-    _MIN_VISUAL_DURATION_SEC,
-    _TARGET_SECONDS_PER_VISUAL,
-    VisualBeatPlanningModule,
-)
+from libs.providers.editor.profiles import DEFAULT_PROFILE_NAME, get_render_profile
+from services.agent_video.app.modules.visual_beat_planning import VisualBeatPlanningModule
 from services.agent_video.app.pipeline_schema import (
     ResolvedAsset,
     SegmentInput,
@@ -123,7 +120,7 @@ def test_long_segments_are_split_into_several_visuals(duration_sec: float):
     )
     assert len(beats) > 1
     # Never longer than the pacing target allows.
-    target = _TARGET_SECONDS_PER_VISUAL[Pacing.MEDIUM]
+    target = get_render_profile(DEFAULT_PROFILE_NAME).seconds_per_visual("medium")
     assert all(beat.duration_sec <= target + 0.01 for beat in beats)
 
 
@@ -152,7 +149,75 @@ def test_no_visual_is_shown_too_briefly_to_register():
     beats = VisualBeatPlanningModule().plan(
         [_segment(pacing=Pacing.FAST)], [_voice(duration_sec=5.0)]
     )
-    assert all(beat.duration_sec >= _MIN_VISUAL_DURATION_SEC - 1e-9 for beat in beats)
+    floor = get_render_profile(DEFAULT_PROFILE_NAME).min_visual_duration_sec
+    assert all(beat.duration_sec >= floor - 1e-9 for beat in beats)
+
+
+def test_visual_pacing_is_configurable_not_hardcoded(tmp_path):
+    """Cutting rhythm has to be a config change, not a code change.
+
+    Renders the same narration under two profiles that differ *only* in
+    their seconds-per-visual targets, and requires the tighter one to
+    actually produce more visuals — which fails if the module ever goes
+    back to reading its own constants.
+    """
+    from libs.core.config import get_settings
+    from libs.providers.editor import profiles as profiles_module
+
+    def _profile(name: str, target: float) -> str:
+        return (
+            f"{name}:\n"
+            "  resolution: '1920x1080'\n"
+            "  fps: 30\n"
+            "  loudness_target_lufs: -14\n"
+            "  crossfade_sec: 0.5\n"
+            "  subtitle_font_size: 44\n"
+            f"  seconds_per_visual_fast: {target}\n"
+            f"  seconds_per_visual_medium: {target}\n"
+            f"  seconds_per_visual_slow: {target}\n"
+            "  min_visual_duration_sec: 0.5\n"
+        )
+
+    config = tmp_path / "profiles.yaml"
+    config.write_text(_profile("leisurely", 6.0) + _profile("snappy", 2.0), encoding="utf-8")
+
+    settings = get_settings()
+    original = settings.render_profiles_path
+    profiles_module._load_config.cache_clear()
+    object.__setattr__(settings, "render_profiles_path", str(config))
+    try:
+        leisurely = VisualBeatPlanningModule("leisurely").plan(
+            [_segment()], [_voice(duration_sec=24.0)]
+        )
+        snappy = VisualBeatPlanningModule("snappy").plan(
+            [_segment()], [_voice(duration_sec=24.0)]
+        )
+    finally:
+        object.__setattr__(settings, "render_profiles_path", original)
+        profiles_module._load_config.cache_clear()
+
+    assert len(snappy) > len(leisurely)
+    assert len(leisurely) == 4  # 24s / 6s
+    assert len(snappy) == 12  # 24s / 2s
+
+
+def test_default_profile_cuts_within_the_intended_band():
+    """The shipped long-form defaults should hold a visual for roughly
+    2-5 seconds — the rhythm of a modern educational channel, and the
+    band the profile's own comments document.
+    """
+    profile = get_render_profile(DEFAULT_PROFILE_NAME)
+    for pacing in ("fast", "medium", "slow"):
+        assert 2.0 <= profile.seconds_per_visual(pacing) <= 5.0
+    assert profile.seconds_per_visual("fast") < profile.seconds_per_visual("slow")
+
+
+def test_unknown_pacing_falls_back_to_medium_rather_than_raising():
+    """`pacing` is model-supplied free-ish text, so an unexpected value
+    must degrade rather than fail a whole render.
+    """
+    profile = get_render_profile(DEFAULT_PROFILE_NAME)
+    assert profile.seconds_per_visual("bewildered") == profile.seconds_per_visual("medium")
 
 
 def test_very_short_segment_still_gets_exactly_one_visual():
@@ -409,6 +474,97 @@ def test_unknown_framing_and_emotion_fall_back_instead_of_failing():
         _beat(), _segment(camera_framing="whatever", narration_emotion="indescribable")
     )
     assert "lens" in prompt and "light" in prompt
+
+
+def test_prompt_carries_every_layer_the_brief_calls_for():
+    """subject, environment, lighting, camera angle, composition, style,
+    and (when applicable) historical accuracy.
+    """
+    segment = _segment()
+    segment = SegmentInput(
+        segment_id=segment.segment_id,
+        order_index=segment.order_index,
+        segment_type=segment.segment_type,
+        text=segment.text,
+        scene_notes=None,
+        visual_notes="A crowded dockside warehouse at first light",
+        production=segment.production,
+    )
+    prompt = compose_visual_prompt(_beat("by 1683 the trade had shifted"), segment)
+
+    assert "a busy harbour at dawn" in prompt  # subject
+    assert "set in A crowded dockside warehouse" in prompt  # environment
+    assert "light" in prompt  # lighting
+    assert "lens" in prompt  # camera angle
+    assert "composition" in prompt  # composition
+    assert "photorealistic" in prompt  # style
+    assert "historically accurate period detail" in prompt  # historical accuracy
+
+
+def test_environment_comes_from_the_segments_own_scene_notes():
+    segment = _segment()
+    with_notes = SegmentInput(
+        segment_id=segment.segment_id,
+        order_index=segment.order_index,
+        segment_type=segment.segment_type,
+        text=segment.text,
+        scene_notes="A candlelit stone cellar packed with barrels",
+        visual_notes=None,
+        production=segment.production,
+    )
+    assert "set in A candlelit stone cellar" in compose_visual_prompt(_beat(), with_notes)
+    # No notes at all is fine — the layer is simply omitted.
+    assert "set in" not in compose_visual_prompt(_beat(), segment)
+
+
+def test_long_scene_notes_are_trimmed_not_dumped_into_the_prompt():
+    segment = _segment()
+    verbose = SegmentInput(
+        segment_id=segment.segment_id,
+        order_index=segment.order_index,
+        segment_type=segment.segment_type,
+        text=segment.text,
+        scene_notes=(
+            "A vast candlelit hall crowded with merchants and their servants arguing "
+            "loudly over the price of the new season's harvest. Camera pushes in slowly. "
+            "Then we cut to the ledger."
+        ),
+        visual_notes=None,
+        production=segment.production,
+    )
+    prompt = compose_visual_prompt(_beat(), verbose)
+    assert "Camera pushes in" not in prompt, "prose beyond the opening clause leaked in"
+    assert "set in A vast candlelit hall" in prompt
+
+
+@pytest.mark.parametrize(
+    "narration",
+    [
+        "by 1683 the siege had ended",
+        "in the seventeenth century merchants traded here",
+        "medieval guilds controlled the docks",
+        "the ancient trade routes carried it north",
+    ],
+)
+def test_historical_beats_request_period_accuracy(narration):
+    assert "historically accurate period detail" in compose_visual_prompt(
+        _beat(narration), _segment()
+    )
+
+
+@pytest.mark.parametrize(
+    "narration",
+    [
+        "modern roasters use precise heat curves",
+        "the app syncs your settings across devices",
+        "most people drink it without thinking about any of this",
+    ],
+)
+def test_contemporary_beats_do_not_request_period_accuracy(narration):
+    """Asking for period accuracy on a present-day subject is worse than
+    asking for nothing — it drags the image toward costume drama.
+    """
+    assert "period detail" not in compose_visual_prompt(_beat(narration), _segment())
 
 
 # --- timeline ----------------------------------------------------------------

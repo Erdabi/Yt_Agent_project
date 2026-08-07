@@ -42,6 +42,7 @@ from libs.providers.editor.base import (
     SubtitleLine,
     VisualClip,
 )
+from libs.providers.editor.profiles import DEFAULT_PROFILE_NAME
 from libs.providers.registry import get_provider
 from libs.storage import get_storage_backend
 
@@ -61,8 +62,10 @@ _VIDEO_SHOT_TYPES = frozenset({ShotType.STOCK, ShotType.AI_VIDEO})
 #: today's only real caller (video_agent.py) never varies this, but
 #: `render()` accepts a different one so a future Shorts/aspect-ratio
 #: job is a different argument, not a rewrite of this module or the
-#: compositor.
-_DEFAULT_PROFILE_NAME = "long_form_1080p"
+#: compositor. Imported rather than redeclared: Visual Beat Planning
+#: reads the same profile for its cutting rhythm, and the two must agree
+#: or a video would be cut for one format and rendered for another.
+_DEFAULT_PROFILE_NAME = DEFAULT_PROFILE_NAME
 
 
 @dataclass(frozen=True)

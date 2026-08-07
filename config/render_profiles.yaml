@@ -24,6 +24,26 @@
 # `visual_crossfade_sec` is the dissolve between consecutive visuals
 # *inside* one segment, distinct from `crossfade_sec`, which is the fade
 # between whole segments.
+#
+# --- Visual pacing -------------------------------------------------------
+# How long one visual holds the screen, and therefore how many distinct
+# visuals a segment's narration is broken into
+# (services/agent_video/app/modules/visual_beat_planning.py). These live
+# here, alongside resolution and frame rate, because cutting rhythm is
+# part of an output format: a Shorts cut legitimately changes shot faster
+# than a long-form documentary does, and both should be describable
+# without touching code.
+#
+# `seconds_per_visual_{fast,medium,slow}` is the target hold time for a
+# segment at that `pacing` — the Script Agent's own per-beat judgment
+# (libs/schemas/script_production.py), so an energetic beat cuts faster
+# and an explanatory one lingers. A segment's visual count is its
+# measured narration duration divided by the matching target.
+#
+# `min_visual_duration_sec` is the floor. Subdivision stops before beats
+# would fall below it: a visual shown for under ~2s reads as a flicker
+# rather than a shot, so a short segment gets *fewer* visuals rather than
+# impossibly brief ones. Raising it caps how fast any profile can cut.
 
 long_form_1080p:
   resolution: "1920x1080"
@@ -33,6 +53,10 @@ long_form_1080p:
   subtitle_font_size: 44
   ken_burns_zoom_per_sec: 0.015
   visual_crossfade_sec: 0.4
+  seconds_per_visual_fast: 2.5
+  seconds_per_visual_medium: 3.5
+  seconds_per_visual_slow: 5.0
+  min_visual_duration_sec: 2.0
 
 shorts_1080x1920:
   resolution: "1080x1920"
@@ -41,6 +65,10 @@ shorts_1080x1920:
   crossfade_sec: 0.3
   subtitle_font_size: 56
   # Shorts are watched faster and cut faster: slightly stronger motion,
-  # slightly quicker dissolves.
+  # slightly quicker dissolves, and a visibly tighter cutting rhythm.
   ken_burns_zoom_per_sec: 0.02
   visual_crossfade_sec: 0.25
+  seconds_per_visual_fast: 1.8
+  seconds_per_visual_medium: 2.5
+  seconds_per_visual_slow: 3.5
+  min_visual_duration_sec: 1.5

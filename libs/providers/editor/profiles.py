@@ -28,6 +28,13 @@ from libs.core.config import get_settings
 # repo root: libs/providers/editor/profiles.py -> editor -> providers -> libs -> root
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
+#: The profile used when a caller doesn't name one. Defined here rather
+#: than in any one consumer because two stages now read a profile — the
+#: compositor (resolution, fps, fades) and Visual Beat Planning (cutting
+#: rhythm) — and they must resolve the *same* profile or a video would be
+#: cut for one format and rendered for another.
+DEFAULT_PROFILE_NAME = "long_form_1080p"
+
 
 class RenderProfileError(RuntimeError):
     """The render profiles config file is missing, malformed, or names a
@@ -57,6 +64,30 @@ class RenderProfile:
     #: segment — distinct from `crossfade_sec` above, which is between
     #: segments. `0` makes them hard cuts.
     visual_crossfade_sec: float = 0.4
+    #: Target hold time for one visual, selected by the segment's own
+    #: `pacing` — see config/render_profiles.yaml for the full rationale.
+    #: Read by Visual Beat Planning, not by the compositor: cutting
+    #: rhythm and output format travel together, so a Shorts profile
+    #: cuts faster without any code knowing what "Shorts" means.
+    seconds_per_visual_fast: float = 2.5
+    seconds_per_visual_medium: float = 3.5
+    seconds_per_visual_slow: float = 5.0
+    #: Floor on how briefly any visual may be shown; subdivision stops
+    #: rather than producing beats shorter than this.
+    min_visual_duration_sec: float = 2.0
+
+    def seconds_per_visual(self, pacing: str) -> float:
+        """Target hold time for a segment with this `pacing` value
+        (`libs.schemas.script_production.Pacing`). An unrecognized value
+        falls back to the medium target rather than raising: `pacing` is
+        model-supplied, so an unexpected string is a data problem to
+        absorb, not a reason to fail a render.
+        """
+        return {
+            "fast": self.seconds_per_visual_fast,
+            "medium": self.seconds_per_visual_medium,
+            "slow": self.seconds_per_visual_slow,
+        }.get(pacing, self.seconds_per_visual_medium)
 
 
 @lru_cache
@@ -89,6 +120,10 @@ def get_render_profile(name: str) -> RenderProfile:
             subtitle_font_size=int(entry.get("subtitle_font_size", 44)),
             ken_burns_zoom_per_sec=float(entry.get("ken_burns_zoom_per_sec", 0.015)),
             visual_crossfade_sec=float(entry.get("visual_crossfade_sec", 0.4)),
+            seconds_per_visual_fast=float(entry.get("seconds_per_visual_fast", 2.5)),
+            seconds_per_visual_medium=float(entry.get("seconds_per_visual_medium", 3.5)),
+            seconds_per_visual_slow=float(entry.get("seconds_per_visual_slow", 5.0)),
+            min_visual_duration_sec=float(entry.get("min_visual_duration_sec", 2.0)),
         )
     except KeyError as exc:
         raise RenderProfileError(f"render profile {name!r} is missing required field: {exc}") from exc

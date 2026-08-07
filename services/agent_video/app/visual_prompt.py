@@ -29,6 +29,8 @@ subject matter. The same beat always composes the same prompt, which is
 what lets the Asset Cache key on it meaningfully.
 """
 
+import re
+
 from libs.schemas.script_production import AssetType
 
 from .pipeline_schema import SegmentInput, VisualBeat
@@ -103,8 +105,8 @@ _DEFAULT_MOOD_CLAUSE = "natural cinematic lighting, balanced contrast, rich colo
 #: `AssetType` surfaces here as a missing key rather than silently
 #: rendering as something inappropriate.
 _MEDIUM_CLAUSES: dict[AssetType, str] = {
-    AssetType.AI_IMAGE: "photorealistic documentary photography, authentic period-accurate detail",
-    AssetType.AI_VIDEO: "photorealistic documentary cinematography, authentic period-accurate detail",
+    AssetType.AI_IMAGE: "photorealistic documentary photography, authentic detail",
+    AssetType.AI_VIDEO: "photorealistic documentary cinematography, authentic detail",
     AssetType.ANIMATION: "stylized editorial illustration, clean confident linework, cohesive palette",
     AssetType.DIAGRAM: (
         "clean modern infographic diagram, flat vector style, clear visual hierarchy, "
@@ -153,22 +155,105 @@ _MIN_KEYWORD_LENGTH = 4
 
 _PUNCTUATION = ".,!?;:\"'()[]—–"
 
+#: How much of the segment's own scene/visual notes is folded in as the
+#: environment layer. Those fields are written for a human storyboarder
+#: and can run to several sentences; a diffusion prompt wants a setting,
+#: not a paragraph, so only the opening clause is used.
+_MAX_ENVIRONMENT_CHARS = 90
+
+#: Signals that a beat depicts a specific historical period, in which
+#: case the prompt asks for period accuracy. Detected from the text
+#: rather than assumed, because "period-accurate" is actively wrong for
+#: a contemporary subject — it drags a modern kitchen or a software
+#: diagram toward looking like a costume drama. Deliberately signals of
+#: *time*, not of any particular subject, so this stays topic-agnostic.
+_ERA_KEYWORDS = (
+    "ancient", "medieval", "renaissance", "victorian", "edwardian", "georgian",
+    "colonial", "prehistoric", "antiquity", "classical", "byzantine", "ottoman",
+    "dynasty", "empire", "century", "bce", " bc ", " ad ", "millennium",
+    "1800s", "1900s", "middle ages", "industrial revolution", "world war",
+)
+
+#: A bare year (1000-2099) is the other strong era signal — "in 1683",
+#: "by 1750". Anchored to four digits so quantities ("15000 sacks") and
+#: short numbers don't match.
+_YEAR_PATTERN = re.compile(r"\b(1[0-9]{3}|20[0-9]{2})\b")
+
 
 def compose_visual_prompt(beat: VisualBeat, segment: SegmentInput) -> str:
     """The full generation prompt for one visual beat.
 
     Layers, in the order a cinematographer would specify a shot: what is
-    in frame, how it is framed, how it is lit, what medium it is, and
-    what technical quality is expected.
+    in frame, where it takes place, how it is framed, how it is lit,
+    whether it needs period accuracy, what medium it is, and what
+    technical quality is expected. Every layer is derived from data the
+    script already produced — none of it is invented here, and none of
+    it is specific to any subject matter.
     """
     parts = [
         _subject_clause(beat),
+        _environment_clause(segment),
         _framing_clause(segment.production.camera_framing),
         _mood_clause(segment.production.narration_emotion),
+        _period_clause(beat, segment),
         _MEDIUM_CLAUSES.get(beat.asset_type, _DEFAULT_MEDIUM_CLAUSE),
         _QUALITY_SUFFIX,
     ]
     return ", ".join(part for part in parts if part)
+
+
+def _environment_clause(segment: SegmentInput) -> str:
+    """Where the shot takes place.
+
+    Taken from the segment's own `scene_notes`/`visual_notes` — the
+    Script Agent's description of what is happening on screen, written
+    for whoever storyboards the beat. Those fields already exist and
+    already say exactly this; before this layer they were simply unused
+    by prompt composition, so every beat in a segment was framed with no
+    sense of place beyond whatever its requirement line mentioned.
+    """
+    source = segment.visual_notes or segment.scene_notes
+    if not source:
+        return ""
+    # First clause only: these fields run to several sentences of prose
+    # aimed at a human, and a diffusion prompt wants a setting.
+    opening = re.split(r"[.;\n]", source.strip(), maxsplit=1)[0].strip()
+    if not opening:
+        return ""
+    if len(opening) > _MAX_ENVIRONMENT_CHARS:
+        opening = opening[:_MAX_ENVIRONMENT_CHARS].rsplit(" ", 1)[0]
+    return f"set in {opening.rstrip(',')}"
+
+
+def _period_clause(beat: VisualBeat, segment: SegmentInput) -> str:
+    """Period-accuracy instruction, but only when the beat is actually
+    historical.
+
+    Asking unconditionally for "period-accurate" detail is worse than
+    asking for nothing: on a contemporary subject it pulls the image
+    toward costume drama. So the era signal has to be present in the
+    text this beat was built from before the instruction is added.
+    """
+    haystack = " ".join(
+        (
+            beat.narration_text,
+            beat.requirement_description,
+            segment.scene_notes or "",
+            segment.visual_notes or "",
+        )
+    ).lower()
+    if not _mentions_a_period(haystack):
+        return ""
+    return (
+        "historically accurate period detail, researched costume, "
+        "architecture and materials, no anachronisms"
+    )
+
+
+def _mentions_a_period(text: str) -> bool:
+    if _YEAR_PATTERN.search(text):
+        return True
+    return any(keyword in text for keyword in _ERA_KEYWORDS)
 
 
 def _subject_clause(beat: VisualBeat) -> str:
