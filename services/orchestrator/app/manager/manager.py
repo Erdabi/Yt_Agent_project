@@ -151,6 +151,59 @@ class ManagerAgent:
                     ),
                 )
 
+            # The third net, and the one that guards the pipeline's most
+            # basic invariant: a stage may only be left behind once its
+            # job actually succeeded. "Did this job succeed?" is a fact
+            # sitting in `job_status`, not a judgment call, so the engine
+            # does not get a vote on it.
+            #
+            # Without this, a run advanced to video_creation while the
+            # scripting job was still RUNNING — the engine reasoned that
+            # "reprocessing will ensure consistency" and answered
+            # `advance`. The Video Agent then failed with "no script
+            # found for project ...", which reads like a data-integrity
+            # bug and is really just this: the next stage started before
+            # the previous one had produced anything.
+            #
+            # A still-RUNNING job needs no decision at all — whatever
+            # finishes it will notify the Manager again, and acting now
+            # would either duplicate that work or race it.
+            if decision.action == WorkflowAction.ADVANCE and job_status != JobStatus.SUCCEEDED:
+                if job_status == JobStatus.FAILED:
+                    replacement = (
+                        WorkflowAction.RETRY
+                        if retry_count < max_retries
+                        else WorkflowAction.ESCALATE
+                    )
+                    decision = Decision(
+                        action=replacement,
+                        reasoning=(
+                            f"Job status is {job_status.value}, so the stage cannot be "
+                            f"advanced past; {replacement} instead "
+                            f"({retry_count}/{max_retries} retries used). "
+                            f"(reasoning engine said: {decision.reasoning})"
+                        ),
+                    )
+                else:
+                    logger.info(
+                        "manager_decision_ignored",
+                        reason="advance requested for a job that has not succeeded",
+                        stage=current_stage.value,
+                        job_status=job_status.value,
+                    )
+                    self._record_event(
+                        "project",
+                        project_id,
+                        "workflow_decision_ignored",
+                        {
+                            "action": decision.action,
+                            "reasoning": decision.reasoning,
+                            "stage": current_stage.value,
+                            "job_status": job_status.value,
+                        },
+                    )
+                    return
+
             logger.info(
                 "manager_decision",
                 action=decision.action,
