@@ -323,7 +323,7 @@ def _beat_covers_visual(beat: ScriptBeat) -> bool:
     return any(req.asset_type in VISUAL_ASSET_TYPES for req in beat.production.asset_requirements)
 
 
-def _labelled_beats(script: GeneratedScript) -> list[tuple[str, ScriptBeat]]:
+def labelled_beats(script: GeneratedScript) -> list[tuple[str, ScriptBeat]]:
     """Every beat in narration order, each with the human-readable label
     used in validation errors. Shared by the validators below so they
     can't drift apart on what counts as "a beat".
@@ -376,7 +376,7 @@ def _validate_beat_distinctness(script: GeneratedScript) -> None:
     falls back to the prior, already-valid draft.
     """
     seen: list[tuple[str, list[str], set[str]]] = []
-    for label, beat in _labelled_beats(script):
+    for label, beat in labelled_beats(script):
         words = _normalized_words(beat.voiceover_text)
         vocabulary = set(words)
         for prior_label, prior_words, prior_vocabulary in seen:
@@ -418,7 +418,7 @@ def _validate_asset_coverage(script: GeneratedScript) -> None:
     an initial draft); `review()`'s existing exception handling already
     catches it and falls back to the prior, already-valid draft.
     """
-    for label, beat in _labelled_beats(script):
+    for label, beat in labelled_beats(script):
         if not _beat_covers_visual(beat):
             raise ValueError(
                 f"{label} describes a visual (scene_description/visual_suggestions) "

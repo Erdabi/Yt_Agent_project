@@ -78,6 +78,36 @@ class AssetType(str, enum.Enum):
 #: it plans as on-screen shots vs. supplementary audio.
 VISUAL_ASSET_TYPES = frozenset(AssetType) - {AssetType.SOUND_EFFECT, AssetType.BACKGROUND_MUSIC_CUE}
 
+#: Which `libs.providers` capability has to be working for each asset
+#: type to be producible — `None` for the two that never reach a provider
+#: at all (`TEXT_OVERLAY` is composited as on-screen text at render time,
+#: `SUBTITLE_EMPHASIS` is read directly by Subtitle Generation), which is
+#: why those two are always available whatever the environment looks
+#: like.
+#:
+#: This lives next to `AssetType` itself, rather than in whichever
+#: component happens to need it, because it is a property of the
+#: vocabulary: naming a new asset type without saying what would produce
+#: it leaves every consumer guessing. It is deliberately the *only*
+#: place that mapping is written down — the Script Agent validates
+#: against it, the CLI derives its production-constraint note from it,
+#: and the Video Agent's own routing table is checked against it by
+#: test, so the three cannot quietly disagree about what `animation`
+#: needs.
+ASSET_TYPE_CAPABILITY: dict[AssetType, str | None] = {
+    AssetType.AI_VIDEO: "video_gen",
+    AssetType.ANIMATION: "video_gen",
+    AssetType.AI_IMAGE: "image_gen",
+    AssetType.DIAGRAM: "image_gen",
+    AssetType.MAP: "image_gen",
+    AssetType.PORTRAIT: "image_gen",
+    AssetType.STOCK_FOOTAGE: "stock_media",
+    AssetType.SOUND_EFFECT: "audio_library",
+    AssetType.BACKGROUND_MUSIC_CUE: "audio_library",
+    AssetType.TEXT_OVERLAY: None,
+    AssetType.SUBTITLE_EMPHASIS: None,
+}
+
 
 class AssetRequirement(BaseModel):
     """One concrete production need for a beat. `description` is content

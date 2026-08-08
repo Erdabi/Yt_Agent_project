@@ -300,16 +300,16 @@ def test_reused_channel_gets_a_refreshed_constraint_note(require_postgres):
     assert persona_config["operator_persona"] == "Warm, factual narrator."
 
 
-def test_every_routed_asset_type_maps_to_a_capability_the_registry_knows():
-    """`_ASSET_TYPE_CAPABILITY` is an intentional copy of the Video
-    Agent's `ASSET_TYPE_ROUTING` (services/ is never imported from repo
-    root). A capability renamed on one side and not the other would
+def test_every_asset_capability_is_one_the_registry_can_resolve():
+    """`ASSET_TYPE_CAPABILITY` names capabilities that must exist in
+    config/providers.yaml. A capability renamed on one side only would
     silently mark asset types unsupported forever, which is invisible —
     the run just quietly produces a narrower script.
     """
     from libs.core.config import get_settings
     from libs.providers.registry import _load_config
-    from scripts.run_pipeline import _ASSET_TYPE_CAPABILITY
+    from libs.schemas.script_production import ASSET_TYPE_CAPABILITY
 
     configured = set(_load_config(get_settings().providers_config_path))
-    assert set(_ASSET_TYPE_CAPABILITY.values()) <= configured
+    named = {capability for capability in ASSET_TYPE_CAPABILITY.values() if capability}
+    assert named <= configured

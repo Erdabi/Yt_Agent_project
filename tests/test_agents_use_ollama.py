@@ -14,12 +14,35 @@ from unittest import mock
 import pytest
 
 
+def _installed_comfyui_nodes() -> set[str]:
+    """Every node class the shipped ComfyUI templates reference, so a
+    faked `/object_info` reports an instance that can run them."""
+    from libs.providers._comfyui_common import load_workflow_template, workflow_node_types
+
+    nodes: set[str] = set()
+    for path in ("config/comfyui/text_to_image.json", "config/comfyui/text_to_video.json"):
+        workflow, _ = load_workflow_template(path)
+        nodes |= workflow_node_types(workflow)
+    return nodes
+
+
+_INSTALLED_COMFYUI_NODES = _installed_comfyui_nodes()
+
+
 def _fake_ollama_chat(tool_input: dict):
     """A `requests.request` stand-in returning Ollama's `/api/chat`
     shape for whatever `tool_input` dict the caller wants back.
     """
 
-    def _fake(method, url, *, json=None, timeout=None):
+    def _fake(method, url, *, json=None, timeout=None, params=None):
+        # The Script Agent now asks the provider registry which asset
+        # types are fulfillable before validating a script, and the
+        # ComfyUI providers answer that by querying /object_info. That is
+        # a different call than the one these tests are about, so it is
+        # answered plausibly rather than asserted on — reporting every
+        # node class installed, so nothing is judged unavailable here.
+        if url.endswith("/object_info"):
+            return _Resp(200, {name: {} for name in _INSTALLED_COMFYUI_NODES})
         assert url.endswith("/api/chat")
         return _Resp(200, {
             "message": {"role": "assistant", "content": json_lib.dumps(tool_input)},

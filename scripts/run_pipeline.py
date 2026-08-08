@@ -72,8 +72,10 @@ from libs.models import (
     Voiceover,
 )
 from libs.models.enums import JobStatus, ProjectStage, ProjectStatus
-from libs.providers.base import ProviderConfigError, ProviderReadiness
+from libs.providers.base import ProviderReadiness
+from libs.providers.capabilities import capability_readiness, fulfillable_asset_types
 from libs.providers.registry import get_provider
+from libs.schemas.script_production import AssetType
 from libs.storage.registry import get_storage_backend
 
 # A project sitting at PUBLISHING (or past it) means every stage this
@@ -83,27 +85,12 @@ from libs.storage.registry import get_storage_backend
 _SUCCESS_STAGES = {ProjectStage.PUBLISHING, ProjectStage.PUBLISHED}
 _FAILURE_STATUSES = {ProjectStatus.FAILED, ProjectStatus.NEEDS_HUMAN_REVIEW, ProjectStatus.CANCELLED}
 
-# Mirrors services/agent_video/app/pipeline_schema.py's ASSET_TYPE_ROUTING
-# (script AssetType -> libs.providers capability). Kept as a small,
-# independent copy rather than importing across the service boundary
-# (services/agent_video is its own deployable, never imported by another
-# service or by tooling at the repo root — see docs/architecture/
-# 02-folder-structure.md) — if that routing table changes, update both.
-_ASSET_TYPE_CAPABILITY = {
-    "ai_video": "video_gen",
-    "animation": "video_gen",
-    "ai_image": "image_gen",
-    "diagram": "image_gen",
-    "map": "image_gen",
-    "portrait": "image_gen",
-    "stock_footage": "stock_media",
-    "sound_effect": "audio_library",
-    "background_music_cue": "audio_library",
-}
-# Never routed to a provider at all (text_overlay is a render-time overlay,
-# subtitle_emphasis is read directly by Subtitle Generation) — always
-# usable regardless of which providers are configured.
-_ALWAYS_SUPPORTED_ASSET_TYPES = ("text_overlay", "subtitle_emphasis")
+# Which asset types this run can actually fulfil, and why not when it
+# can't, both come from libs.providers.capabilities — the same functions
+# the Script Agent validates against. This script used to keep its own
+# copy of the asset-type -> capability map, which meant the constraint it
+# advertised in the prompt and the rule the pipeline actually enforced
+# were two separate pieces of knowledge that could disagree.
 
 
 class PipelineError(RuntimeError):
@@ -184,44 +171,11 @@ def run_preflight(settings) -> None:
     print()
 
 
-def capability_readiness() -> dict[str, ProviderReadiness]:
-    """Asks each asset-backing capability's *active* provider whether it
-    can actually serve a request right now (`Provider.check_readiness()`,
-    libs/providers/base.py), resolved through the same
-    config/providers.yaml this whole system already treats as the single
-    source of truth (libs/providers/registry.py).
-
-    This deliberately asks the provider rather than inspecting its class
-    name. "The configured class isn't a `Stub*`" answers a different,
-    weaker question — whether an integration was *written* — and the two
-    come apart exactly where it hurts most: a real `ComfyUIVideoProvider`
-    pointed at a ComfyUI that lacks the custom nodes its workflow needs
-    passes the class-name test and then fails every single request with
-    HTTP 400. Getting that wrong here is not a cosmetic error, because
-    this function's answer becomes a hard constraint in the Script
-    Agent's prompt: claim a capability the box can't deliver and the
-    script is written around assets that can never be produced, so the
-    run dies at video_creation with a whole script already generated.
-    """
-    readiness: dict[str, ProviderReadiness] = {}
-    for capability in dict.fromkeys(_ASSET_TYPE_CAPABILITY.values()):
-        try:
-            readiness[capability] = get_provider(capability).check_readiness()
-        except ProviderConfigError as exc:
-            readiness[capability] = ProviderReadiness.unavailable(
-                f"no usable provider configured for {capability}: {exc}"
-            )
-    return readiness
-
-
 def _supported_asset_types(readiness: dict[str, ProviderReadiness] | None = None) -> list[str]:
     """Which script `asset_type`s can actually be fulfilled right now."""
-    resolved = capability_readiness() if readiness is None else readiness
-    return list(_ALWAYS_SUPPORTED_ASSET_TYPES) + [
-        asset_type
-        for asset_type, capability in _ASSET_TYPE_CAPABILITY.items()
-        if capability in resolved and resolved[capability].ready
-    ]
+    return sorted(
+        asset_type.value for asset_type in fulfillable_asset_types(readiness)
+    )
 
 
 # --- channel + goal -------------------------------------------------------
@@ -299,7 +253,7 @@ def build_production_constraint_note(
     # deriving the forbidden list from the same readiness answer keeps
     # the two halves of this instruction from ever contradicting each
     # other the way a hand-maintained list of names would.
-    unsupported = sorted(set(_ASSET_TYPE_CAPABILITY) - set(supported))
+    unsupported = sorted({asset_type.value for asset_type in AssetType} - set(supported))
     note = (
         "PRODUCTION CONSTRAINT (hard requirement, not a style preference): "
         "this channel's video pipeline can only fulfill these production "

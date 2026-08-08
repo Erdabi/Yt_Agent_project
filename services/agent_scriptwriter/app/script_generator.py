@@ -52,12 +52,15 @@ from libs.llm_usage import track_llm_call
 from libs.prompts import PromptNotFoundError, PromptRenderError, get_prompt_loader
 from libs.providers.base import ProviderConfigError
 from libs.providers.llm.base import LLMProviderError, LLMToolCall
+from libs.providers.capabilities import fulfillable_asset_types, unfulfillable_reasons
+from libs.schemas.script_production import AssetType
 from libs.providers.registry import get_provider
 
 from .script_schema import (
     SCRIPT_CONTENT_PROPERTIES,
     SCRIPT_CONTENT_REQUIRED,
     GeneratedScript,
+    labelled_beats,
     render_knowledge_package_context,
     script_from_dict,
 )
@@ -87,6 +90,67 @@ _PROPOSE_SCRIPT_TOOL = LLMToolCall(
         "additionalProperties": False,
     },
 )
+
+
+def _validate_asset_types_are_fulfillable(
+    script: GeneratedScript, allowed: set[AssetType], reasons: dict[AssetType, str]
+) -> None:
+    """Reject a script that asks for something this deployment cannot
+    produce.
+
+    Takes the permitted set rather than looking it up, so this stays a
+    pure function: it is called once per repair round, and asking the
+    provider registry — which probes a live ComfyUI over HTTP — on every
+    round would put a network call inside a validation, and make the
+    answer able to change between rounds of fixing the same script.
+    `generate()` resolves it once and passes it down.
+
+    The permitted asset types are already stated in the Script Agent's
+    prompt, but a prompt is advice: a model that overlooks that line
+    emits a script which passes every structural check and is still
+    physically impossible. That contradiction used to surface only deep
+    inside Asset Generation — one run spent 2.9 hours building narration
+    and 28 images before a single `background_music_cue` on the final
+    beat failed the job, four times over, because no audio_library
+    provider exists here.
+
+    Checking it at the point the script is produced turns hours of wasted
+    work into one more repair round, and does it without narrowing what
+    the pipeline can do: what is fulfillable is read from the live
+    provider registry (`fulfillable_asset_types()`), so configuring an
+    audio library makes `background_music_cue` legal again with no change
+    here.
+
+    Raises `ValueError`, exactly like the other script validations, so
+    `_parse_with_repair()` hands it back to the model to fix.
+    """
+    offences: list[str] = []
+    for label, beat in labelled_beats(script):
+        for requirement in beat.production.asset_requirements:
+            if requirement.asset_type not in allowed:
+                offences.append(f"{label} asks for {requirement.asset_type.value}")
+    if not offences:
+        return
+
+    named = sorted(
+        {
+            requirement.asset_type
+            for _, beat in labelled_beats(script)
+            for requirement in beat.production.asset_requirements
+            if requirement.asset_type not in allowed
+        },
+        key=lambda asset_type: asset_type.value,
+    )
+    detail = "; ".join(
+        f"{asset_type.value}: {reasons.get(asset_type, 'not available here')}"
+        for asset_type in named
+    )
+    permitted = ", ".join(sorted(asset_type.value for asset_type in allowed))
+    raise ValueError(
+        f"{'; '.join(offences)} — no working provider can produce "
+        f"{'that' if len(named) == 1 else 'those'} here ({detail}). "
+        f"Replace with one of: {permitted}."
+    )
 
 
 class ScriptGenerator:
@@ -154,9 +218,22 @@ class ScriptGenerator:
         if not result.tool_input["main_sections"]:
             raise ScriptGenerationError("the model returned a script with no main sections")
 
-        return self._parse_with_repair(result.tool_input, context)
+        # Resolved once, here: this probes the live provider registry
+        # (an HTTP call to ComfyUI for the ComfyUI providers), and it is
+        # the same function build_production_constraint_note() derives
+        # the prompt's permitted list from — so what the model was told
+        # and what it is held to come from one source.
+        allowed = fulfillable_asset_types()
+        reasons = unfulfillable_reasons()
+        return self._parse_with_repair(result.tool_input, context, allowed, reasons)
 
-    def _parse_with_repair(self, payload: dict, context: ProjectContext) -> GeneratedScript:
+    def _parse_with_repair(
+        self,
+        payload: dict,
+        context: ProjectContext,
+        allowed: set[AssetType],
+        reasons: dict[AssetType, str],
+    ) -> GeneratedScript:
         """Validates `payload`, and on rejection asks the model to fix
         the specific defect the validator named, up to
         `SCRIPT_REPAIR_ATTEMPTS` times.
@@ -169,7 +246,9 @@ class ScriptGenerator:
         attempts_left = max(get_settings().script_repair_attempts, 0)
         while True:
             try:
-                return script_from_dict(payload)
+                script = script_from_dict(payload)
+                _validate_asset_types_are_fulfillable(script, allowed, reasons)
+                return script
             except ValueError as exc:
                 if attempts_left <= 0:
                     logger.error("script_generator_invalid_script", error=str(exc))
