@@ -18,6 +18,7 @@ from unittest import mock
 
 import pytest
 
+from libs.schemas.script_production import AssetType
 from services.agent_scriptwriter.app.script_generator import (
     ScriptGenerationError,
     ScriptGenerator,
@@ -98,6 +99,23 @@ def generator_with_responses():
                 "services.agent_scriptwriter.app.script_generator.track_llm_call",
                 return_value=mock.MagicMock(),
             ),
+            # `generate()` asks the provider registry which asset types
+            # are fulfillable, and the ComfyUI providers answer that with
+            # a real HTTP call to /object_info. Left unpatched, every
+            # test in this file would depend on a ComfyUI being up — it
+            # would pass on a developer machine running one and fail in
+            # CI, or on the same machine an hour later. These tests are
+            # about the repair loop; fulfillability has its own file
+            # (test_asset_type_fulfillability.py), so the answer is
+            # pinned to "everything is available" here.
+            mock.patch(
+                "services.agent_scriptwriter.app.script_generator.fulfillable_asset_types",
+                return_value=set(AssetType),
+            ),
+            mock.patch(
+                "services.agent_scriptwriter.app.script_generator.unfulfillable_reasons",
+                return_value={},
+            ),
         )
         return generator, provider, context, patches
 
@@ -105,7 +123,7 @@ def generator_with_responses():
 
 
 def _run(generator, context, patches):
-    with patches[0], patches[1], patches[2]:
+    with patches[0], patches[1], patches[2], patches[3], patches[4]:
         return generator.generate(context)
 
 

@@ -761,3 +761,105 @@ def test_compositor_honors_per_clip_durations_and_never_truncates_narration(tmp_
     # 0.4s and 1.4s both land inside the first visual (0.0-2.0s), well
     # clear of the dissolve into the second.
     assert _frame_at(0.4) != _frame_at(1.4), "still image is motionless — Ken Burns not applied"
+
+
+# --- every narrated second must have something on screen --------------------
+#
+# Measured on a real 130s render: the final segment's only requirements
+# were `background_music_cue` and `text_overlay`, so Visual Beat Planning
+# correctly planned no beats (neither produces a generated file) and the
+# compositor received zero visual clips. ffmpeg's blackdetect reported
+# `black_start:118.8 black_duration:11.4` while narration played on at
+# -18.2 dB — eleven seconds of black screen under live speech, in an
+# otherwise healthy video.
+
+
+def _overlay_only_asset(segment_id: str, order_index: int):
+    """A render-time text overlay: a real visual requirement that
+    produces no file, so it puts nothing on screen by itself.
+    """
+    return ResolvedAsset(
+        segment_id=segment_id,
+        order_index=order_index,
+        requirement_index=0,
+        asset_type=AssetType.TEXT_OVERLAY,
+        shot_type=None,
+        is_audio=False,
+        resolution_kind=None,
+        asset_id=None,
+        storage_path=None,
+        provider_name=None,
+        description="Subscribe for more history",
+        beat_index=None,
+        start_sec=0.0,
+        duration_sec=None,
+    )
+
+
+def test_a_segment_with_only_an_overlay_still_shows_a_picture():
+    """The regression. Such a segment must not reach the compositor with
+    nothing to display, or its whole narration plays over black.
+    """
+    segments = [_segment("s1", 0), _segment("s2", 1)]
+    voices = [_voice("s1", 0, 19.25), _voice("s2", 1, 11.35)]
+    beats = [b for b in VisualBeatPlanningModule().plan(segments, voices) if b.segment_id == "s1"]
+    resolved = [_resolved(beat) for beat in beats] + [_overlay_only_asset("s2", 1)]
+
+    timeline = TimelineBuildingModule().build("proj", segments, resolved, voices, [])
+    final = timeline.entries[-1]
+    on_screen = [a for a in final.visual_assets if a.storage_path]
+
+    assert on_screen, "final segment has nothing on screen — it would render as black"
+    # It covers the segment's whole narration, not a fraction of it.
+    assert on_screen[0].duration_sec == pytest.approx(11.35)
+    # The overlay is still there, composited over the carried picture.
+    assert any(a.storage_path is None for a in final.visual_assets)
+
+
+def test_the_carried_visual_comes_from_the_preceding_segment():
+    """Carrying the previous shot forward is what makes it look
+    deliberate; pulling an arbitrary earlier image would read as a jump.
+    """
+    segments = [_segment("s1", 0), _segment("s2", 1)]
+    voices = [_voice("s1", 0, 19.25), _voice("s2", 1, 11.35)]
+    beats = [b for b in VisualBeatPlanningModule().plan(segments, voices) if b.segment_id == "s1"]
+    resolved = [_resolved(beat) for beat in beats] + [_overlay_only_asset("s2", 1)]
+
+    timeline = TimelineBuildingModule().build("proj", segments, resolved, voices, [])
+    previous_last = [a for a in timeline.entries[0].visual_assets if a.storage_path][-1]
+    carried = [a for a in timeline.entries[-1].visual_assets if a.storage_path][0]
+
+    assert carried.storage_path == previous_last.storage_path
+    # Re-homed onto the segment it now covers, so downstream placement
+    # and any per-segment bookkeeping stay consistent.
+    assert carried.segment_id == "s2"
+
+
+def test_a_segment_with_real_visuals_is_left_alone():
+    """The carry-forward must only fill genuine gaps — it must never add
+    a duplicate of the previous shot to a segment that has its own.
+    """
+    segments = [_segment("s1", 0), _segment("s2", 1)]
+    voices = [_voice("s1", 0, 19.25), _voice("s2", 1, 11.35)]
+    beats = VisualBeatPlanningModule().plan(segments, voices)
+    resolved = [_resolved(beat) for beat in beats]
+
+    timeline = TimelineBuildingModule().build("proj", segments, resolved, voices, [])
+    for entry in timeline.entries:
+        paths = [a.storage_path for a in entry.visual_assets if a.storage_path]
+        assert paths, "every segment should have its own visuals here"
+        assert len(paths) == len(set(paths)), "carry-forward duplicated an existing visual"
+
+
+def test_a_leading_segment_with_no_visual_is_left_honest():
+    """With nothing before it there is nothing to carry, and inventing a
+    picture would be worse than the compositor's own handling. It must
+    not crash.
+    """
+    segments = [_segment("s1", 0)]
+    voices = [_voice("s1", 0, 11.35)]
+    timeline = TimelineBuildingModule().build(
+        "proj", segments, [_overlay_only_asset("s1", 0)], voices, []
+    )
+    assert timeline.entries[0].visual_assets  # the overlay itself survives
+    assert not [a for a in timeline.entries[0].visual_assets if a.storage_path]

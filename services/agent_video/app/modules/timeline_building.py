@@ -49,6 +49,9 @@ class TimelineBuildingModule:
 
         entries: list[TimelineEntry] = []
         cursor_sec = 0.0
+        #: The most recent asset that actually put something on screen,
+        #: used to cover a later segment that has none of its own.
+        last_screen_visual = None
         for segment in sorted(segments, key=lambda s: s.order_index):
             voice_segment = voice_by_segment.get(segment.segment_id)
             if voice_segment is None:
@@ -75,6 +78,44 @@ class TimelineBuildingModule:
                     asset.beat_index if asset.beat_index is not None else 0,
                 ),
             )
+            # A segment can legitimately end up with nothing to put on
+            # screen: its only visual requirement may be a render-time
+            # text overlay (`text_overlay` has no generated file), which
+            # Visual Beat Planning correctly declines to plan beats for
+            # because there is no provider asset to make. The compositor
+            # then receives zero visual clips and fills the segment with
+            # black — narration keeps playing over a blank screen, which
+            # measured as an 11.4s black tail on a real render whose
+            # final beat asked only for `background_music_cue` and
+            # `text_overlay`.
+            #
+            # Carrying the previous segment's last visual forward is what
+            # an editor does here anyway: a closing card or a caption
+            # sits over the footage that was already running, not over
+            # black. Only the *screen* matters for this — an overlay or
+            # audio-only asset does not count as something visible.
+            screen_visuals = [asset for asset in visual_assets if asset.storage_path]
+            if not screen_visuals and last_screen_visual is not None:
+                carried = dataclasses.replace(
+                    last_screen_visual,
+                    segment_id=segment.segment_id,
+                    order_index=segment.order_index,
+                    beat_index=None,
+                    start_sec=0.0,
+                    duration_sec=voice_segment.duration_sec,
+                )
+                # Ahead of any overlay, which is composited on top of it.
+                visual_assets = [carried, *visual_assets]
+                logger.info(
+                    "timeline_carried_visual_forward",
+                    segment_id=segment.segment_id,
+                    order_index=segment.order_index,
+                    duration_sec=round(voice_segment.duration_sec, 2),
+                    reason="segment has no on-screen visual of its own",
+                )
+            elif screen_visuals:
+                last_screen_visual = screen_visuals[-1]
+
             supplementary_audio = [asset for asset in segment_assets if asset.is_audio]
 
             shifted_cues = [
